@@ -64,6 +64,17 @@ export interface InterviewTurn {
   answer: string;
 }
 
+export interface InterviewSession {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  asrName: string;
+  llmName: string;
+  sourceSessionId?: string;
+  carriedTurnCount: number;
+  turns: SessionRecord[];
+}
+
 export type AsrStatus = "idle" | "connecting" | "listening" | "finalizing" | "error";
 export type AnswerStatus = "idle" | "generating" | "complete" | "error";
 

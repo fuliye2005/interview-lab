@@ -8,7 +8,7 @@ import { buildInterviewPrompt, sanitizeAnswerText, streamLlm } from "./lib/llm";
 import { extractMaterialText, makeCandidateDraft, makeJobDraft } from "./lib/materials";
 import { formatShortcut, shortcutKeyToken, toGlobalShortcut } from "./lib/shortcut";
 import { clearHistory, loadHistory, loadMaterials, loadSettings, saveHistory, saveMaterials, saveSettings } from "./lib/storage";
-import type { AnswerStatus, AppSettings, AsrPreset, AsrStatus, InterviewTurn, LlmProfile, MaterialContext, SessionRecord } from "./types";
+import type { AnswerStatus, AppSettings, AsrPreset, AsrStatus, InterviewSession, InterviewTurn, LlmProfile, MaterialContext, SessionRecord } from "./types";
 import { createAsrPreset, createDefaultLlmProfile } from "./types";
 import "./App.css";
 import "./theme.css";
@@ -63,7 +63,7 @@ function App() {
   const [tab, setTab] = useState<Tab>("session");
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
   const [materials, setMaterials] = useState<MaterialContext>(loadMaterials);
-  const [history, setHistory] = useState<SessionRecord[]>(loadHistory);
+  const [history, setHistory] = useState<InterviewSession[]>(loadHistory);
   const [sessionActive, setSessionActive] = useState(false);
   const [sessionMode, setSessionMode] = useState<SessionMode>("idle");
   const [testMode, setTestMode] = useState<TestMode>("all");
@@ -79,6 +79,9 @@ function App() {
   const pendingRef = useRef(false);
   const questionRef = useRef("");
   const interviewTurnsRef = useRef<InterviewTurn[]>([]);
+  const activeSessionIdRef = useRef("");
+  const loadedContextRef = useRef<InterviewTurn[]>([]);
+  const loadedSourceSessionIdRef = useRef<string | undefined>(undefined);
   const activeProfile = useMemo(() => settings.llmProfiles.find((item) => item.id === settings.activeLlmProfileId) ?? settings.llmProfiles[0], [settings]);
   const desktopRuntime = isTauri();
   const llmReady = Boolean(activeProfile?.baseUrl.trim() && activeProfile?.apiKey.trim() && activeProfile?.model.trim());
@@ -137,9 +140,53 @@ function App() {
     setSettings((state) => ({ ...state, llmProfiles: state.llmProfiles.map((item) => item.id === id ? { ...item, [key]: value } : item) }));
   }
   function log(raw: string) { if (settings.asr.debug) setDebug((items) => [raw.slice(0, 1000), ...items].slice(0, 30)); }
+  function interviewTurnsForSession(sessionId: string, sessions = history): InterviewTurn[] {
+    const byId = new Map(sessions.map((session) => [session.id, session]));
+    const chain: InterviewSession[] = [];
+    let current = byId.get(sessionId);
+    while (current) {
+      chain.unshift(current);
+      current = current.sourceSessionId ? byId.get(current.sourceSessionId) : undefined;
+    }
+    return chain.flatMap((session) => session.turns.filter((turn) => !turn.error && turn.answer.trim()).map(({ question, answer }) => ({ question, answer })));
+  }
   function beginInterview() {
-    interviewTurnsRef.current = [];
-    setTurnCount(0);
+    const now = new Date().toISOString();
+    const carriedTurns = loadedContextRef.current;
+    const session: InterviewSession = {
+      id: crypto.randomUUID(),
+      createdAt: now,
+      updatedAt: now,
+      asrName: settings.asr.name,
+      llmName: activeProfile?.name || "未选择文本模型",
+      sourceSessionId: loadedSourceSessionIdRef.current,
+      carriedTurnCount: carriedTurns.length,
+      turns: [],
+    };
+    activeSessionIdRef.current = session.id;
+    interviewTurnsRef.current = carriedTurns;
+    loadedContextRef.current = [];
+    loadedSourceSessionIdRef.current = undefined;
+    setTurnCount(carriedTurns.length);
+    setHistory((items) => [session, ...items]);
+  }
+  function appendSessionRecord(record: SessionRecord) {
+    const sessionId = activeSessionIdRef.current;
+    if (!sessionId) return;
+    setHistory((items) => items.map((session) => session.id === sessionId ? { ...session, updatedAt: record.createdAt, turns: [...session.turns, record] } : session));
+  }
+  function loadSessionContext(session: InterviewSession) {
+    if (sessionActive) { setNotice("请先结束当前会话，再载入历史会话作为下一轮上下文。"); return; }
+    const turns = interviewTurnsForSession(session.id);
+    loadedContextRef.current = turns;
+    loadedSourceSessionIdRef.current = session.id;
+    interviewTurnsRef.current = turns;
+    setTurnCount(turns.length);
+    setQuestion("");
+    setAnswer("");
+    setAnswerStatus("idle");
+    setTab("session");
+    setNotice(`已载入 ${turns.length} 轮历史问答；点击“启动测试”后会创建下一轮面试记录并延续这些上下文。`);
   }
 
   async function startSession(mode: Exclude<TestMode, "answer">) {
@@ -257,11 +304,11 @@ function App() {
       setAnswerStatus("complete");
       interviewTurnsRef.current = [...previousTurns, { question: finalQuestion, answer: cleanAnswer }];
       setTurnCount(interviewTurnsRef.current.length);
-      setHistory((items) => [{ id: crypto.randomUUID(), createdAt: new Date().toISOString(), question: finalQuestion, answer: cleanAnswer, asrName: settings.asr.name, llmName: activeProfile.name }, ...items]);
+      appendSessionRecord({ id: crypto.randomUUID(), createdAt: new Date().toISOString(), question: finalQuestion, answer: cleanAnswer, asrName: settings.asr.name, llmName: activeProfile.name });
     } catch (error) {
       const message = error instanceof Error ? error.message : "文本模型请求失败";
       setAnswerStatus("error"); setNotice(message);
-      setHistory((items) => [{ id: crypto.randomUUID(), createdAt: new Date().toISOString(), question: finalQuestion, answer: "", asrName: settings.asr.name, llmName: activeProfile.name, error: message }, ...items]);
+      appendSessionRecord({ id: crypto.randomUUID(), createdAt: new Date().toISOString(), question: finalQuestion, answer: "", asrName: settings.asr.name, llmName: activeProfile.name, error: message });
     }
   }
   async function copyAnswer() {
@@ -330,7 +377,7 @@ function App() {
       {tab === "settings" && <section className="settings-stack"><div className="panel"><div className="panel-head"><div><h2>实时 ASR Provider</h2><p>选择预配置后，只需填写对应的 Token、AppKey 或 App ID。音频固定为 PCM 16-bit / 单声道 / 16 kHz。</p></div></div><div className="asr-presets" role="group" aria-label="语音识别预配置"><button className={settings.asr.preset === "aliyun-trial" ? "active" : ""} onClick={() => selectAsrPreset("aliyun-trial")}>阿里云试用</button><button className={settings.asr.preset === "aliyun-nls" ? "active" : ""} onClick={() => selectAsrPreset("aliyun-nls")}>阿里云正式</button><button className={settings.asr.preset === "volcengine-asr" ? "active" : ""} onClick={() => selectAsrPreset("volcengine-asr")}>豆包流式识别</button><button className={settings.asr.preset === "generic" ? "active" : ""} onClick={() => selectAsrPreset("generic")}>通用 WebSocket</button></div>{settings.asr.protocol === "volcengine-asr" && <p className="config-warning">豆包预配置已填入官方服务地址和 PCM 参数。该服务需要自定义二进制帧及 Authorization 请求头，当前版本暂未接入底层原生传输，不能直接开始识别。</p>}<div className="form-grid"><Field label="名称" value={settings.asr.name} onChange={(value) => updateAsr("name", value)} /><Field label="WebSocket URL" value={settings.asr.wsUrl} onChange={(value) => updateAsr("wsUrl", value)} placeholder="wss://…" /><Field label={settings.asr.protocol === "aliyun-nls" ? "阿里云临时 Token" : settings.asr.protocol === "volcengine-asr" ? "豆包 Access Token" : "API Key"} value={settings.asr.apiKey} type="password" onChange={(value) => updateAsr("apiKey", value)} />{settings.asr.protocol === "aliyun-nls" && <Field label="阿里云 AppKey" value={settings.asr.appKey || ""} onChange={(value) => updateAsr("appKey", value)} />}{settings.asr.protocol === "volcengine-asr" && <><Field label="豆包 App ID" value={settings.asr.appId || ""} onChange={(value) => updateAsr("appId", value)} /><Field label="豆包 Cluster" value={settings.asr.cluster || ""} onChange={(value) => updateAsr("cluster", value)} placeholder="控制台显示的 Cluster ID" /></>}<Field label="超时（ms）" value={String(settings.asr.timeoutMs)} onChange={(value) => updateAsr("timeoutMs", Number(value) || 10000)} /></div><details><summary>高级协议配置</summary><p className="config-note">阿里云预设默认开启中间结果、标点预测和中文数字规范化；豆包预设默认请求 ITN 与标点。多语模型均需要在各自控制台开通或配置。</p><div className="form-grid three"><Field label="音频封装" value={settings.asr.audioMode} onChange={(value) => updateAsr("audioMode", value as "binary" | "json-base64")} select={[["binary", "原始二进制 PCM"], ["json-base64", "JSON Base64"]]} /><Field label="事件路径" value={settings.asr.eventPath || ""} onChange={(value) => updateAsr("eventPath", value)} /><Field label="文本路径" value={settings.asr.textPath || ""} onChange={(value) => updateAsr("textPath", value)} /><Field label="增量事件" value={settings.asr.partialEvent || ""} onChange={(value) => updateAsr("partialEvent", value)} /><Field label="最终事件" value={settings.asr.finalEvent || ""} onChange={(value) => updateAsr("finalEvent", value)} /><Field label="错误事件" value={settings.asr.errorEvent || ""} onChange={(value) => updateAsr("errorEvent", value)} /></div><label>初始化消息 JSON</label><textarea rows={3} value={settings.asr.initMessage} onChange={(event) => updateAsr("initMessage", event.target.value)} /><label>JSON/Base64 音频模板（使用 {'{{base64}}'}）</label><textarea rows={2} value={settings.asr.audioTemplate} onChange={(event) => updateAsr("audioTemplate", event.target.value)} /><label>结束/Flush 消息 JSON</label><textarea rows={2} value={settings.asr.finalizeMessage} onChange={(event) => updateAsr("finalizeMessage", event.target.value)} /></details><label className="checkbox"><input type="checkbox" checked={settings.asr.debug} onChange={(event) => updateAsr("debug", event.target.checked)} />显示 ASR 原始消息调试日志</label></div>
         <div className="panel"><div className="panel-head"><div><h2>文本模型 Profiles</h2><p>参考 Agent：Base URL、Key、上游协议和模型；回答精细程度和思考深度按当前模型保存。</p></div><button onClick={() => { const profile = createDefaultLlmProfile(); setSettings((state) => ({ ...state, llmProfiles: [...state.llmProfiles, profile], activeLlmProfileId: profile.id })); }}>添加模型</button></div>{settings.llmProfiles.map((profile) => <div key={profile.id} className="profile"><div className="profile-title"><label className="radio"><input type="radio" checked={profile.id === settings.activeLlmProfileId} onChange={() => setSettings((state) => ({ ...state, activeLlmProfileId: profile.id }))} />用作当前模型</label><button className="link danger-text" disabled={settings.llmProfiles.length === 1} onClick={() => setSettings((state) => ({ ...state, llmProfiles: state.llmProfiles.filter((item) => item.id !== profile.id), activeLlmProfileId: state.llmProfiles.find((item) => item.id !== profile.id)?.id || "" }))}>删除</button></div><div className="form-grid"><Field label="名称" value={profile.name} onChange={(value) => updateProfile(profile.id, "name", value)} /><Field label="模型" value={profile.model} onChange={(value) => updateProfile(profile.id, "model", value)} /><Field label="Base URL" value={profile.baseUrl} onChange={(value) => updateProfile(profile.id, "baseUrl", value)} placeholder="https://…/v1" /><Field label="Key" value={profile.apiKey} type="password" onChange={(value) => updateProfile(profile.id, "apiKey", value)} /><Field label="上游协议" value={profile.protocol} onChange={(value) => updateProfile(profile.id, "protocol", value as LlmProfile["protocol"])} select={[["responses", "Responses API"], ["chat-completions", "Chat Completions"]]} /><Field label="自定义路径（可选）" value={profile.requestPath || ""} onChange={(value) => updateProfile(profile.id, "requestPath", value)} /><Field label="回答精细程度" value={profile.answerDetail || "balanced"} onChange={(value) => updateProfile(profile.id, "answerDetail", value as LlmProfile["answerDetail"])} select={[["concise", "简洁"], ["balanced", "标准"], ["detailed", "详细"]]} /><Field label="思考深度" value={profile.reasoningEffort || "none"} onChange={(value) => updateProfile(profile.id, "reasoningEffort", value as LlmProfile["reasoningEffort"])} select={[["none", "不指定"], ["low", "低"], ["medium", "中"], ["high", "高"]]} /></div><label>额外请求头 JSON</label><textarea rows={2} value={profile.extraHeaders} onChange={(event) => updateProfile(profile.id, "extraHeaders", event.target.value)} /></div>)}</div>
         <div className="panel"><h2>全局快捷键</h2><div className="shortcut-field"><span>快捷键</span><ShortcutRecorder value={settings.shortcut} onChange={(value) => setSettings((state) => ({ ...state, shortcut: value }))} /></div></div></section>}
-      {tab === "history" && <section className="panel history-panel"><div className="panel-head"><div><h2>本地文本记录</h2><p>问题、答案、错误和 Provider 名称；不保存音频。</p></div><button className="danger" onClick={() => { clearHistory(); setHistory([]); }}>清空记录</button></div>{history.length ? history.map((item) => <article className="history-item" key={item.id}><div><span>{new Date(item.createdAt).toLocaleString()}</span><strong>{item.asrName} → {item.llmName}</strong></div><h3>{item.question}</h3>{item.error ? <p className="error">{item.error}</p> : <p>{item.answer}</p>}</article>) : <p className="empty">还没有文本记录。</p>}</section>}
+      {tab === "history" && <section className="panel history-panel"><div className="panel-head"><div><h2>面试会话记录</h2><p>每次启动测试都会创建一场面试；不保存音频。</p></div><button className="danger" onClick={() => { clearHistory(); setHistory([]); }}>清空记录</button></div>{history.length ? history.map((session) => <article className="history-item" key={session.id}><div><span>{new Date(session.createdAt).toLocaleString()} · {session.turns.length} 轮问答{session.carriedTurnCount ? ` · 承接 ${session.carriedTurnCount} 轮上下文` : ""}</span><button className="text-button" disabled={sessionActive} onClick={() => loadSessionContext(session)}>载入为下一轮上下文</button></div><strong>{session.asrName} → {session.llmName}</strong>{session.turns.length ? session.turns.map((turn) => <div className="history-turn" key={turn.id}><h3>{turn.question}</h3>{turn.error ? <p className="error">{turn.error}</p> : <p>{turn.answer}</p>}</div>) : <p className="empty-session">本次测试尚未提交问题。</p>}</article>) : <p className="empty">还没有面试会话记录。</p>}</section>}
     </section>
   </main>;
 }

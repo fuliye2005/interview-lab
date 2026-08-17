@@ -1,4 +1,4 @@
-import type { AppSettings, LlmProfile, MaterialContext, SessionRecord } from "../types";
+import type { AppSettings, InterviewSession, LlmProfile, MaterialContext, SessionRecord } from "../types";
 import { createAsrPreset, createDefaultAsrConfig, createDefaultLlmProfile } from "../types";
 
 const SETTINGS_KEY = "interview-lab.settings.v1";
@@ -81,10 +81,30 @@ export function loadSettings(): AppSettings {
 export const saveSettings = (settings: AppSettings) => write(SETTINGS_KEY, settings);
 export const loadMaterials = () => read(MATERIALS_KEY, emptyMaterials());
 export const saveMaterials = (materials: MaterialContext) => write(MATERIALS_KEY, materials);
-export const loadHistory = () => read<SessionRecord[]>(HISTORY_KEY, []);
+function isInterviewSession(value: unknown): value is InterviewSession {
+  return typeof value === "object" && value !== null && Array.isArray((value as InterviewSession).turns);
+}
 
-export function saveHistory(history: SessionRecord[]) {
-  write(HISTORY_KEY, history.slice(0, 100));
+export function loadHistory(): InterviewSession[] {
+  const history = read<unknown>(HISTORY_KEY, []);
+  if (!Array.isArray(history)) return [];
+  return history.map((item) => {
+    if (isInterviewSession(item)) return item;
+    const record = item as SessionRecord;
+    return {
+      id: record.id,
+      createdAt: record.createdAt,
+      updatedAt: record.createdAt,
+      asrName: record.asrName,
+      llmName: record.llmName,
+      carriedTurnCount: 0,
+      turns: [record],
+    };
+  }).filter((item) => Boolean(item.id && item.createdAt));
+}
+
+export function saveHistory(history: InterviewSession[]) {
+  write(HISTORY_KEY, history.slice(0, 50));
 }
 
 export function clearHistory() {
