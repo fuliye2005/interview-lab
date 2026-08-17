@@ -119,11 +119,19 @@ function App() {
   }, [desktopRuntime, settings.shortcut, sessionActive]);
 
   function updateAsr<K extends keyof AppSettings["asr"]>(key: K, value: AppSettings["asr"][K]) {
-    setSettings((state) => ({ ...state, asr: { ...state.asr, [key]: value } }));
+    setSettings((state) => {
+      const asr = { ...state.asr, [key]: value };
+      const preset = asr.preset ?? "generic";
+      return { ...state, asr, asrProfiles: { ...state.asrProfiles, [preset]: asr } };
+    });
   }
   function selectAsrPreset(preset: AsrPreset) {
-    setSettings((state) => ({ ...state, asr: { ...createAsrPreset(preset), apiKey: preset === state.asr.preset ? state.asr.apiKey : "" } }));
-    setNotice("已应用 ASR 预配置；填写该服务所需凭证后即可开始测试。");
+    setSettings((state) => {
+      const currentPreset = state.asr.preset ?? "generic";
+      const asr = { ...(state.asrProfiles[preset] ?? createAsrPreset(preset)) };
+      return { ...state, asr, asrProfiles: { ...state.asrProfiles, [currentPreset]: state.asr, [preset]: asr } };
+    });
+    setNotice("已切换到已保存的 ASR 预配置；该预配置的凭证和高级参数会保留在本机。");
   }
   function updateProfile<K extends keyof LlmProfile>(id: string, key: K, value: LlmProfile[K]) {
     setSettings((state) => ({ ...state, llmProfiles: state.llmProfiles.map((item) => item.id === id ? { ...item, [key]: value } : item) }));

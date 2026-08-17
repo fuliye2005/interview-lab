@@ -69,6 +69,7 @@ export type AnswerStatus = "idle" | "generating" | "complete" | "error";
 
 export interface AppSettings {
   asr: AsrProviderConfig;
+  asrProfiles: Partial<Record<AsrPreset, AsrProviderConfig>>;
   llmProfiles: LlmProfile[];
   activeLlmProfileId: string;
   shortcut: string;

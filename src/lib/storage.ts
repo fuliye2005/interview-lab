@@ -7,6 +7,7 @@ const HISTORY_KEY = "interview-lab.history.v1";
 
 export const defaultSettings = (): AppSettings => ({
   asr: createDefaultAsrConfig(),
+  asrProfiles: { "aliyun-trial": createDefaultAsrConfig() },
   llmProfiles: [createDefaultLlmProfile()],
   activeLlmProfileId: "",
   shortcut: "Ctrl+Shift+Space",
@@ -52,14 +53,23 @@ export function loadSettings(): AppSettings {
   const llmProfiles = Array.isArray(stored.llmProfiles) && stored.llmProfiles.length
     ? stored.llmProfiles.map((profile) => normalizeLlmProfile(profile))
     : fallback.llmProfiles;
+  const activeAsr = {
+    ...(stored.asr?.preset ? createAsrPreset(stored.asr.preset) : fallback.asr),
+    ...(stored.asr ?? {}),
+    protocol: stored.asr?.protocol ?? (stored.asr?.wsUrl ? "generic" : fallback.asr.protocol),
+  };
+  const asrProfiles = Object.fromEntries(
+    Object.entries(stored.asrProfiles ?? {}).map(([preset, profile]) => [preset, {
+      ...createAsrPreset(preset as keyof typeof stored.asrProfiles),
+      ...profile,
+    }]),
+  ) as Partial<Record<keyof typeof fallback.asrProfiles, typeof activeAsr>>;
+  const activePreset = activeAsr.preset ?? "generic";
   const settings: AppSettings = {
     ...fallback,
     ...stored,
-    asr: {
-      ...(stored.asr?.preset ? createAsrPreset(stored.asr.preset) : fallback.asr),
-      ...(stored.asr ?? {}),
-      protocol: stored.asr?.protocol ?? (stored.asr?.wsUrl ? "generic" : fallback.asr.protocol),
-    },
+    asr: activeAsr,
+    asrProfiles: { ...fallback.asrProfiles, ...asrProfiles, [activePreset]: activeAsr },
     llmProfiles,
   };
   if (!settings.llmProfiles.some((profile) => profile.id === settings.activeLlmProfileId)) {
