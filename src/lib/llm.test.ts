@@ -27,6 +27,22 @@ describe("buildInterviewPrompt", () => {
   it("marks absent summaries as pending verification", () => {
     const prompt = buildInterviewPrompt("问题", { ...materials, candidateSummary: "", jobSummary: "" }, []);
 
-    expect(prompt.match(/待确认/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(prompt).toContain("仍然回答通用面试问题");
+    expect(prompt).toContain("未提供，按通用面试问题回答");
+    expect(prompt).toContain("没有依据时，明确写“待确认”");
+  });
+
+  it("supports an entirely empty materials context", () => {
+    const prompt = buildInterviewPrompt("你如何处理跨团队协作？", {
+      resume: "",
+      jobDescription: "",
+      personalNotes: "",
+      candidateSummary: "",
+      jobSummary: "",
+      confirmed: false,
+    }, []);
+
+    expect(prompt).toContain("你如何处理跨团队协作？");
+    expect(prompt).toContain("仍然回答通用面试问题");
   });
 });
