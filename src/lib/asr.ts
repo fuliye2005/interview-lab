@@ -33,19 +33,41 @@ function base64(bytes: ArrayBuffer) {
 }
 
 export class GenericAsrSession {
-  private interpolate(template: string, audioBase64 = "") {
+  private socket?: WebSocket;
+  private taskId = "";
+  private started = false;
+  private stoppedByClient = false;
+  private sentenceResults = new Map<number, string>();
+
+  private get isAliyunNls() {
+    return this.config.protocol === "aliyun-nls";
+  }
+
+  private newId() {
+    return crypto.randomUUID().replace(/-/g, "");
+  }
+
+  private interpolate(template: string, audioBase64 = "", messageId = this.newId()) {
     return template
       .split("{{apiKey}}").join(this.config.apiKey)
+      .split("{{appKey}}").join(this.config.appKey || "")
+      .split("{{appId}}").join(this.config.appId || "")
+      .split("{{cluster}}").join(this.config.cluster || "")
+      .split("{{messageId}}").join(messageId)
+      .split("{{taskId}}").join(this.taskId)
       .split("{{base64}}").join(audioBase64);
   }
 
-  private socket?: WebSocket;
   constructor(private readonly config: AsrProviderConfig, private readonly callbacks: AsrCallbacks) {}
 
   async connect() {
     if (!this.config.wsUrl) throw new Error("请先配置 ASR WebSocket 地址");
     if (this.socket?.readyState === WebSocket.OPEN) return;
     this.callbacks.onStatus("connecting");
+    this.taskId = this.newId();
+    this.started = false;
+    this.stoppedByClient = false;
+    this.sentenceResults.clear();
     await new Promise<void>((resolve, reject) => {
       const socket = new WebSocket(this.interpolate(this.config.wsUrl));
       this.socket = socket;
@@ -54,18 +76,40 @@ export class GenericAsrSession {
         reject(new Error("ASR WebSocket 连接超时"));
       }, this.config.timeoutMs);
       socket.onopen = () => {
-        window.clearTimeout(timer);
         try {
           const init = parseJson(this.interpolate(this.config.initMessage || "{}"), "初始化消息");
           if (Object.keys(init).length) socket.send(JSON.stringify(init));
-          this.callbacks.onStatus("listening");
-          resolve();
+          if (!this.isAliyunNls) {
+            window.clearTimeout(timer);
+            this.started = true;
+            this.callbacks.onStatus("listening");
+            resolve();
+          }
         } catch (error) {
+          window.clearTimeout(timer);
           reject(error);
         }
       };
-      socket.onerror = () => reject(new Error("ASR WebSocket 连接失败"));
+      socket.onerror = () => {
+        window.clearTimeout(timer);
+        if (this.started) this.callbacks.onError("ASR WebSocket 连接失败");
+        else reject(new Error("ASR WebSocket 连接失败"));
+      };
+      socket.onclose = () => {
+        if (!this.stoppedByClient && this.started) this.callbacks.onError("ASR WebSocket 连接已关闭");
+      };
       socket.onmessage = (event) => this.handleMessage(event.data);
+      if (this.isAliyunNls) {
+        const originalHandleMessage = socket.onmessage;
+        socket.onmessage = (event) => {
+          const wasStarted = this.started;
+          originalHandleMessage?.call(socket, event);
+          if (!wasStarted && this.started) {
+            window.clearTimeout(timer);
+            resolve();
+          }
+        };
+      }
     });
   }
 
@@ -86,6 +130,7 @@ export class GenericAsrSession {
   }
 
   close() {
+    this.stoppedByClient = true;
     this.socket?.close();
     this.socket = undefined;
   }
@@ -101,6 +146,33 @@ export class GenericAsrSession {
     }
     const type = String(valueAtPath(event, this.config.eventPath) ?? "");
     const transcript = String(valueAtPath(event, this.config.textPath) ?? "");
+    if (this.isAliyunNls) {
+      const status = Number(valueAtPath(event, "header.status") ?? 20000000);
+      if (type === "TranscriptionStarted") {
+        this.started = true;
+        this.callbacks.onStatus("listening");
+        return;
+      }
+      if (status !== 20000000 || type === this.config.errorEvent) {
+        const message = String(valueAtPath(event, "header.status_message") ?? transcript ?? "ASR 服务返回错误");
+        this.callbacks.onError(message);
+        return;
+      }
+      if (type === this.config.partialEvent) {
+        this.callbacks.onPartial(transcript);
+        return;
+      }
+      if (type === "SentenceEnd") {
+        const index = Number(valueAtPath(event, "payload.index") ?? this.sentenceResults.size + 1);
+        this.sentenceResults.set(index, transcript);
+        return;
+      }
+      if (type === this.config.finalEvent) {
+        const fullText = [...this.sentenceResults.entries()].sort(([left], [right]) => left - right).map(([, result]) => result).join("");
+        this.callbacks.onFinal(fullText);
+      }
+      return;
+    }
     if (type === this.config.partialEvent) this.callbacks.onPartial(transcript);
     if (type === this.config.finalEvent) this.callbacks.onFinal(transcript);
     if (type === this.config.errorEvent) this.callbacks.onError(transcript || "ASR 服务返回错误");

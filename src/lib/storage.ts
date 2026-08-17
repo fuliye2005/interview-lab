@@ -1,5 +1,5 @@
-import type { AppSettings, MaterialContext, SessionRecord } from "../types";
-import { createDefaultAsrConfig, createDefaultLlmProfile } from "../types";
+import type { AppSettings, LlmProfile, MaterialContext, SessionRecord } from "../types";
+import { createAsrPreset, createDefaultAsrConfig, createDefaultLlmProfile } from "../types";
 
 const SETTINGS_KEY = "interview-lab.settings.v1";
 const MATERIALS_KEY = "interview-lab.materials.v1";
@@ -34,10 +34,36 @@ function write<T>(key: string, value: T) {
   window.localStorage.setItem(key, JSON.stringify(value));
 }
 
+function normalizeLlmProfile(profile: Partial<LlmProfile>): LlmProfile {
+  const defaults = createDefaultLlmProfile();
+  return {
+    ...defaults,
+    ...profile,
+    id: profile.id || defaults.id,
+    name: profile.name || defaults.name,
+    answerDetail: profile.answerDetail === "concise" || profile.answerDetail === "detailed" || profile.answerDetail === "balanced" ? profile.answerDetail : defaults.answerDetail,
+    reasoningEffort: profile.reasoningEffort === "low" || profile.reasoningEffort === "medium" || profile.reasoningEffort === "high" || profile.reasoningEffort === "none" ? profile.reasoningEffort : defaults.reasoningEffort,
+  };
+}
+
 export function loadSettings(): AppSettings {
-  const settings = read(SETTINGS_KEY, defaultSettings());
-  if (!settings.activeLlmProfileId && settings.llmProfiles[0]) {
-    settings.activeLlmProfileId = settings.llmProfiles[0].id;
+  const stored = read<Partial<AppSettings> | null>(SETTINGS_KEY, defaultSettings()) ?? {};
+  const fallback = defaultSettings();
+  const llmProfiles = Array.isArray(stored.llmProfiles) && stored.llmProfiles.length
+    ? stored.llmProfiles.map((profile) => normalizeLlmProfile(profile))
+    : fallback.llmProfiles;
+  const settings: AppSettings = {
+    ...fallback,
+    ...stored,
+    asr: {
+      ...(stored.asr?.preset ? createAsrPreset(stored.asr.preset) : fallback.asr),
+      ...(stored.asr ?? {}),
+      protocol: stored.asr?.protocol ?? (stored.asr?.wsUrl ? "generic" : fallback.asr.protocol),
+    },
+    llmProfiles,
+  };
+  if (!settings.llmProfiles.some((profile) => profile.id === settings.activeLlmProfileId)) {
+    settings.activeLlmProfileId = settings.llmProfiles[0]?.id || "";
   }
   return settings;
 }

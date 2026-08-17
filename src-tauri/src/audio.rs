@@ -22,11 +22,17 @@ pub fn start_system_audio_capture(app: AppHandle, state: State<'_, AudioCaptureS
     }
     let running = Arc::new(AtomicBool::new(true));
     *active = Some(running.clone());
+    let active_state = state.0.clone();
     thread::Builder::new()
         .name("system-audio-loopback".to_string())
         .spawn(move || {
             if let Err(error) = capture_loop(app.clone(), running.clone()) {
                 let _ = app.emit("audio-capture-error", error);
+            }
+            if let Ok(mut active) = active_state.lock() {
+                if active.as_ref().is_some_and(|current| Arc::ptr_eq(current, &running)) {
+                    *active = None;
+                }
             }
         })
         .map_err(|error| format!("无法启动音频采集线程：{error}"))?;

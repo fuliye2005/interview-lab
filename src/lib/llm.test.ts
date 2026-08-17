@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { buildInterviewPrompt } from "./llm";
-import type { MaterialContext } from "../types";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildInterviewPrompt, sanitizeAnswerText, streamLlm } from "./llm";
+import type { LlmProfile, MaterialContext } from "../types";
 
 const materials: MaterialContext = {
   resume: "原始简历",
@@ -11,9 +11,37 @@ const materials: MaterialContext = {
   confirmed: true,
 };
 
+const profile = (overrides: Partial<LlmProfile> = {}): LlmProfile => ({
+  id: "test-profile",
+  name: "测试模型",
+  baseUrl: "https://example.test/v1",
+  apiKey: "test-key",
+  model: "test-model",
+  protocol: "chat-completions",
+  requestPath: "",
+  extraHeaders: "",
+  contextWindow: 8000,
+  answerDetail: "balanced",
+  reasoningEffort: "none",
+  ...overrides,
+});
+
+function sseResponse() {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"回答"}}]}\n\n'));
+      controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+      controller.close();
+    },
+  });
+  return new Response(body, { status: 200 });
+}
+
+afterEach(() => vi.restoreAllMocks());
+
 describe("buildInterviewPrompt", () => {
   it("uses confirmed context and requires Chinese first-person grounded answers", () => {
-    const prompt = buildInterviewPrompt("请介绍订单系统的难点", materials, ["请介绍自己"]);
+    const prompt = buildInterviewPrompt("请介绍订单系统的难点", materials, [{ question: "请介绍自己", answer: "我有三年后端开发经验。" }]);
 
     expect(prompt).toContain("始终使用中文");
     expect(prompt).toContain("候选人第一人称");
@@ -21,6 +49,8 @@ describe("buildInterviewPrompt", () => {
     expect(prompt).toContain(materials.candidateSummary);
     expect(prompt).toContain(materials.jobSummary);
     expect(prompt).toContain("请介绍自己");
+    expect(prompt).toContain("我有三年后端开发经验。");
+    expect(prompt).toContain("同一场面试的连续上下文");
     expect(prompt).toContain("请介绍订单系统的难点");
   });
 
@@ -44,5 +74,55 @@ describe("buildInterviewPrompt", () => {
 
     expect(prompt).toContain("你如何处理跨团队协作？");
     expect(prompt).toContain("仍然回答通用面试问题");
+  });
+
+  it("changes the answer instructions for each detail level", () => {
+    const concise = buildInterviewPrompt("问题", materials, [], "concise");
+    const balanced = buildInterviewPrompt("问题", materials, [], "balanced");
+    const detailed = buildInterviewPrompt("问题", materials, [], "detailed");
+
+    expect(concise).toContain("回答精细程度：简洁");
+    expect(balanced).toContain("回答精细程度：标准");
+    expect(detailed).toContain("回答精细程度：详细");
+    expect(concise).not.toBe(balanced);
+    expect(balanced).not.toBe(detailed);
+  });
+});
+
+describe("streamLlm reasoning settings", () => {
+  it("does not send a reasoning field when effort is not specified", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse());
+
+    await streamLlm(profile(), "问题", () => undefined);
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body).not.toHaveProperty("reasoning_effort");
+    expect(body).not.toHaveProperty("reasoning");
+  });
+
+  it("maps effort to Chat Completions reasoning_effort", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse());
+
+    await streamLlm(profile({ reasoningEffort: "medium" }), "问题", () => undefined);
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.reasoning_effort).toBe("medium");
+    expect(body).not.toHaveProperty("reasoning");
+  });
+
+  it("maps effort to Responses API reasoning.effort", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse());
+
+    await streamLlm(profile({ protocol: "responses", reasoningEffort: "high" }), "问题", () => undefined);
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.reasoning).toEqual({ effort: "high" });
+    expect(body).not.toHaveProperty("reasoning_effort");
+  });
+});
+
+describe("sanitizeAnswerText", () => {
+  it("removes markdown asterisks before display", () => {
+    expect(sanitizeAnswerText("**回答提纲**\n* 第一条\n普通文本")).toBe("回答提纲\n 第一条\n普通文本");
   });
 });

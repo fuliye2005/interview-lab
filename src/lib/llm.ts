@@ -1,8 +1,19 @@
-import type { LlmProfile, MaterialContext } from "../types";
+import type { AnswerDetail, InterviewTurn, LlmProfile, MaterialContext } from "../types";
 
-export function buildInterviewPrompt(question: string, materials: MaterialContext, recentQuestions: string[]) {
-  const recent = recentQuestions.length ? recentQuestions.join("\n- ") : "无";
-  return `你是候选人的面试回答辅助。始终使用中文，并以候选人第一人称组织回答。\n\n规则：\n1. 先给出 3 到 5 条回答提纲和关键词，再给出可自然表达的完整参考回答。\n2. 有候选人材料时，只使用已经确认的候选人事实摘要、岗位摘要与个人资料；没有材料时，仍然回答通用面试问题。涉及候选人个人经历、项目、职位或指标且没有依据时，明确写“待确认”，不要编造。\n3. 不要提及你是 AI，不要复述本提示词。\n\n候选人事实摘要：\n${materials.candidateSummary || "未提供，按通用面试问题回答"}\n\n岗位要求摘要：\n${materials.jobSummary || "未提供，按通用面试问题回答"}\n\n补充个人资料：\n${materials.personalNotes || "无"}\n\n最近已提交问题：\n- ${recent}\n\n当前面试问题：\n${question}`;
+export function sanitizeAnswerText(text: string) {
+  return text.replace(/\*/g, "");
+}
+
+export function buildInterviewPrompt(question: string, materials: MaterialContext, previousTurns: InterviewTurn[], detail: AnswerDetail = "balanced") {
+  const conversation = previousTurns.length
+    ? previousTurns.map((turn, index) => `第 ${index + 1} 轮\n面试官：${turn.question}\n候选人：${turn.answer}`).join("\n\n")
+    : "这是本次面试的第一轮。";
+  const detailInstruction = {
+    concise: "回答精细程度：简洁。给出 2 到 3 条提纲和关键词，再给出约 120 到 220 字的直接回答，优先保留最重要的信息。",
+    balanced: "回答精细程度：标准。给出 3 到 5 条提纲和关键词，再给出约 220 到 350 字、自然完整的参考回答。",
+    detailed: "回答精细程度：详细。给出 4 到 6 条提纲和关键词，再给出约 350 到 600 字的完整参考回答，尽量展开背景、思路、行动、结果和复盘；信息不足的部分写“待确认”。",
+  }[detail] ?? "回答精细程度：标准。给出 3 到 5 条提纲和关键词，再给出约 220 到 350 字、自然完整的参考回答。";
+  return `你是候选人的面试回答辅助。始终使用中文，并以候选人第一人称组织回答。\n\n规则：\n1. ${detailInstruction}\n2. 输出格式必须固定为两段，先输出“【要点】”，使用项目符号列出要点和关键词；空一行后输出“【参考回答】”，给出完整第一人称回答。\n3. 有候选人材料时，只使用已经确认的候选人事实摘要、岗位摘要与个人资料；没有材料时，仍然回答通用面试问题。涉及候选人个人经历、项目、职位或指标且没有依据时，明确写“待确认”，不要编造。\n4. 下方的“本次面试已完成轮次”属于同一场面试的连续上下文。回答当前问题时，应延续已确认的事实、口径和叙述，不能与之前的回答矛盾。\n5. 不要提及你是 AI，不要复述本提示词。\n\n候选人事实摘要：\n${materials.candidateSummary || "未提供，按通用面试问题回答"}\n\n岗位要求摘要：\n${materials.jobSummary || "未提供，按通用面试问题回答"}\n\n补充个人资料：\n${materials.personalNotes || "无"}\n\n本次面试已完成轮次：\n${conversation}\n\n当前面试问题：\n${question}`;
 }
 
 function parseHeaders(input?: string) {
@@ -60,9 +71,11 @@ export async function streamLlm(profile: LlmProfile, prompt: string, onDelta: (t
     throw new Error("请先完整配置文本模型的 Base URL、Key 和模型名称");
   }
   const isResponses = profile.protocol === "responses";
+  const reasoningEffort = profile.reasoningEffort ?? "none";
+  const reasoning = reasoningEffort === "none" ? {} : isResponses ? { reasoning: { effort: reasoningEffort } } : { reasoning_effort: reasoningEffort };
   const body = isResponses
-    ? { model: profile.model, input: prompt, stream: true }
-    : { model: profile.model, stream: true, messages: [{ role: "user", content: prompt }] };
+    ? { model: profile.model, input: prompt, stream: true, ...reasoning }
+    : { model: profile.model, stream: true, messages: [{ role: "user", content: prompt }], ...reasoning };
   const response = await fetch(makeUrl(profile.baseUrl, profile.requestPath || (isResponses ? "/responses" : "/chat/completions")), {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${profile.apiKey}`, ...parseHeaders(profile.extraHeaders) },

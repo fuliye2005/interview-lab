@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Interview Lab",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "identifier": "com.interviewlab.realtime",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -14,7 +14,9 @@
       {
         "title": "Interview Lab · 实时语音测试台",
         "width": 1280,
-        "height": 840
+        "height": 840,
+        "minWidth": 760,
+        "minHeight": 560
       }
     ],
     "security": {
