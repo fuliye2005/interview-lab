@@ -77,11 +77,20 @@ function write<T>(key: string, value: T) {
 
 function normalizeLlmProfile(profile: Partial<LlmProfile>): LlmProfile {
   const defaults = createDefaultLlmProfile();
+  const provider = profile.provider && ["custom", "openai-compatible", "openai-responses", "openrouter", "deepseek", "kimi", "qwen", "doubao", "ollama"].includes(profile.provider)
+    ? profile.provider
+    : defaults.provider;
+  const modelOptions = Array.isArray(profile.modelOptions)
+    ? profile.modelOptions.filter((model): model is string => typeof model === "string").slice(0, 200)
+    : defaults.modelOptions;
   return {
     ...defaults,
     ...profile,
     id: profile.id || defaults.id,
     name: profile.name || defaults.name,
+    provider,
+    preset: provider,
+    modelOptions,
     answerDetail: profile.answerDetail === "concise" || profile.answerDetail === "detailed" || profile.answerDetail === "balanced" ? profile.answerDetail : defaults.answerDetail,
     reasoningEffort: profile.reasoningEffort === "low" || profile.reasoningEffort === "medium" || profile.reasoningEffort === "high" || profile.reasoningEffort === "none" ? profile.reasoningEffort : defaults.reasoningEffort,
     apiKey: typeof profile.apiKey === "string" ? profile.apiKey : "",

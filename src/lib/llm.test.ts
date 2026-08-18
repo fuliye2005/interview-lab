@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildInterviewPrompt, sanitizeAnswerText, selectInterviewContext, streamLlm, testLlmConnection } from "./llm";
+import { buildInterviewPrompt, listLlmModels, sanitizeAnswerText, selectInterviewContext, streamLlm, testLlmConnection } from "./llm";
 import type { LlmProfile, MaterialContext } from "../types";
 
 const materials: MaterialContext = {
@@ -35,6 +35,10 @@ function sseResponse() {
     },
   });
   return new Response(body, { status: 200 });
+}
+
+function modelsResponse() {
+  return new Response(JSON.stringify({ data: [{ id: "z-model" }, { id: "a-model" }, { id: "a-model" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -119,6 +123,15 @@ describe("streamLlm reasoning settings", () => {
     expect(body).not.toHaveProperty("reasoning");
   });
 
+  it("allows a keyless local Ollama profile", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse());
+
+    await streamLlm(profile({ provider: "ollama", preset: "ollama", apiKey: "", baseUrl: "http://127.0.0.1:11434/v1", model: "qwen2.5:7b" }), "问题", () => undefined);
+
+    expect(fetchMock).toHaveBeenCalled();
+    expect(String(fetchMock.mock.calls[0]?.[1]?.headers)).not.toContain("Bearer");
+  });
+
   it("maps effort to Chat Completions reasoning_effort", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse());
 
@@ -146,6 +159,12 @@ describe("streamLlm reasoning settings", () => {
 
     expect(result.latencyMs).toBeGreaterThanOrEqual(0);
     expect(result.firstTokenMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("loads and sorts unique model ids", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(modelsResponse());
+
+    await expect(listLlmModels(profile())).resolves.toEqual(["a-model", "z-model"]);
   });
 });
 

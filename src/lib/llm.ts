@@ -1,4 +1,5 @@
 import type { AnswerDetail, InterviewFocus, InterviewTurn, LlmProfile, MaterialContext } from "../types";
+import { providerRequiresKey } from "./providers";
 
 export function sanitizeAnswerText(text: string) {
   return text.replace(/\*/g, "");
@@ -55,6 +56,14 @@ function makeUrl(baseUrl: string, path: string) {
   return `${cleanBase}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
+function authHeaders(profile: LlmProfile) {
+  return {
+    "Content-Type": "application/json",
+    ...(profile.apiKey ? { Authorization: `Bearer ${profile.apiKey}` } : {}),
+    ...parseHeaders(profile.extraHeaders),
+  };
+}
+
 function textFromEvent(value: unknown): string {
   const item = value as Record<string, unknown>;
   if (typeof item.delta === "string") return item.delta;
@@ -92,8 +101,8 @@ async function consumeSse(response: Response, onDelta: (text: string) => void) {
 }
 
 export async function streamLlm(profile: LlmProfile, prompt: string, onDelta: (text: string) => void) {
-  if (!profile.baseUrl || !profile.apiKey || !profile.model) {
-    throw new Error("请先完整配置文本模型的 Base URL、Key 和模型名称");
+  if (!profile.baseUrl || !profile.model || (providerRequiresKey(profile) && !profile.apiKey)) {
+    throw new Error(providerRequiresKey(profile) ? "请先完整配置文本模型的 Base URL、Key 和模型名称" : "请先完整配置本地模型的 Base URL 和模型名称");
   }
   const isResponses = profile.protocol === "responses";
   const reasoningEffort = profile.reasoningEffort ?? "none";
@@ -103,11 +112,23 @@ export async function streamLlm(profile: LlmProfile, prompt: string, onDelta: (t
     : { model: profile.model, stream: true, messages: [{ role: "user", content: prompt }], ...reasoning };
   const response = await fetch(makeUrl(profile.baseUrl, profile.requestPath || (isResponses ? "/responses" : "/chat/completions")), {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${profile.apiKey}`, ...parseHeaders(profile.extraHeaders) },
+    headers: authHeaders(profile),
     body: JSON.stringify(body),
   });
   if (!response.ok) throw new Error(`文本模型请求失败：${response.status} ${await response.text()}`);
   await consumeSse(response, onDelta);
+}
+
+export async function listLlmModels(profile: LlmProfile) {
+  if (!profile.baseUrl) throw new Error("请先填写模型 Base URL");
+  const response = await fetch(makeUrl(profile.baseUrl, "/models"), { headers: authHeaders(profile) });
+  if (!response.ok) throw new Error(`获取模型列表失败：${response.status} ${await response.text()}`);
+  const payload = await response.json() as { data?: Array<{ id?: unknown }> };
+  const models = Array.isArray(payload.data)
+    ? payload.data.map((item) => typeof item.id === "string" ? item.id : "").filter(Boolean)
+    : [];
+  if (!models.length) throw new Error("服务未返回可用模型");
+  return Array.from(new Set(models)).sort((a, b) => a.localeCompare(b));
 }
 
 export async function testLlmConnection(profile: LlmProfile) {

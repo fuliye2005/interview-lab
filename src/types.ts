@@ -1,6 +1,7 @@
 export type LlmProtocol = "responses" | "chat-completions";
 export type AnswerDetail = "concise" | "balanced" | "detailed";
 export type ReasoningEffort = "none" | "low" | "medium" | "high";
+export type LlmProviderPresetId = "custom" | "openai-compatible" | "openai-responses" | "openrouter" | "deepseek" | "kimi" | "qwen" | "doubao" | "ollama";
 export type AsrPreset = "aliyun-trial" | "aliyun-nls" | "volcengine-asr" | "generic";
 export type InterviewFocus = "technical-business" | "technical-project" | "customer-solution" | "operations-delivery" | "team-collaboration";
 
@@ -15,9 +16,12 @@ export const INTERVIEW_FOCUS_LABELS: Record<InterviewFocus, string> = {
 export interface LlmProfile {
   id: string;
   name: string;
+  provider?: LlmProviderPresetId;
+  preset?: LlmProviderPresetId;
   baseUrl: string;
   apiKey: string;
   model: string;
+  modelOptions?: string[];
   protocol: LlmProtocol;
   requestPath?: string;
   extraHeaders?: string;
@@ -191,9 +195,12 @@ export const createDefaultAsrConfig = () => createAsrPreset("aliyun-trial");
 export const createDefaultLlmProfile = (): LlmProfile => ({
   id: crypto.randomUUID(),
   name: "我的文本模型",
+  provider: "custom",
+  preset: "custom",
   baseUrl: "https://cf-fast.cctq.ai/v1",
   apiKey: "",
   model: "",
+  modelOptions: [],
   protocol: "chat-completions",
   requestPath: "",
   extraHeaders: "",

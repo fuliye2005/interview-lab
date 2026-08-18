@@ -1,16 +1,17 @@
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, Dispatch, SetStateAction, useEffect, useMemo, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { GenericAsrSession } from "./lib/asr";
-import { buildInterviewPrompt, sanitizeAnswerText, streamLlm, testLlmConnection } from "./lib/llm";
+import { buildInterviewPrompt, listLlmModels, sanitizeAnswerText, streamLlm, testLlmConnection } from "./lib/llm";
 import { extractMaterialText, makeCandidateDraft, makeJobDraft } from "./lib/materials";
+import { applyLlmProviderPreset, LLM_PROVIDER_PRESETS, providerLabel, providerRequiresKey } from "./lib/providers";
 import { importRepository as importRepositoryMaterial } from "./lib/repository";
 import { formatShortcut, shortcutKeyToken, toGlobalShortcut } from "./lib/shortcut";
 import { clearHistory, defaultSettings, emptyMaterials, initializeStorage, loadHistory, loadMaterials, loadSettings, saveHistory, saveMaterials, saveSettings } from "./lib/storage";
-import type { AnswerStatus, AppSettings, AsrPreset, AsrStatus, InterviewFocus, InterviewSession, InterviewTurn, LlmProfile, MaterialContext, SessionRecord } from "./types";
+import type { AnswerStatus, AppSettings, AsrPreset, AsrStatus, InterviewFocus, InterviewSession, InterviewTurn, LlmProfile, LlmProviderPresetId, MaterialContext, SessionRecord } from "./types";
 import { createAsrPreset, createDefaultLlmProfile, INTERVIEW_FOCUS_LABELS } from "./types";
 import "./App.css";
 import "./theme.css";
@@ -20,6 +21,8 @@ type SessionMode = "idle" | "all" | "asr" | "answer";
 type TestMode = "all" | "asr" | "answer";
 type SessionStage = "idle" | "manual" | "listening" | "finalizing" | "answering" | "complete";
 type ProfileTestState = { status: "idle" | "testing" | "success" | "error"; latencyMs?: number; firstTokenMs?: number; message?: string };
+type ProfileSort = "active" | "name" | "updated";
+type ProfileModelState = { status: "idle" | "loading" | "success" | "error"; models: string[]; message?: string };
 type OverlayCommand = { command: "start" | "submit" | "stop" | "hide"; testMode?: TestMode };
 type OverlayState = {
   answer: string;
@@ -79,6 +82,7 @@ function parseContextWindow(value: string) {
 
 function profileConfigPreview(profile: LlmProfile, focus: InterviewFocus) {
   return `model = "${profile.model || "未填写"}"
+provider = "${providerLabel(profile)}"
 base_url = "${profile.baseUrl || "未填写"}"
 protocol = "${profile.protocol}"
 context_window = ${profile.contextWindow || 8000}
@@ -216,6 +220,10 @@ function App() {
   const [activeSessionTitle, setActiveSessionTitle] = useState("");
   const [selectedHistorySessionId, setSelectedHistorySessionId] = useState<string | undefined>();
   const [profileTests, setProfileTests] = useState<Record<string, ProfileTestState>>({});
+  const [profileModelStates, setProfileModelStates] = useState<Record<string, ProfileModelState>>({});
+  const [profileQuery, setProfileQuery] = useState("");
+  const [profileSort, setProfileSort] = useState<ProfileSort>("active");
+  const [expandedProfileIds, setExpandedProfileIds] = useState<string[]>([]);
   const [repositoryUrl, setRepositoryUrl] = useState("");
   const [repositoryImporting, setRepositoryImporting] = useState(false);
   const asrRef = useRef<GenericAsrSession | undefined>(undefined);
@@ -229,7 +237,7 @@ function App() {
   const loadedContextRef = useRef<InterviewTurn[]>([]);
   const loadedSourceSessionIdRef = useRef<string | undefined>(undefined);
   const activeProfile = useMemo(() => settings.llmProfiles.find((item) => item.id === settings.activeLlmProfileId) ?? settings.llmProfiles[0], [settings]);
-  const llmReady = Boolean(activeProfile?.baseUrl.trim() && activeProfile?.apiKey.trim() && activeProfile?.model.trim());
+  const llmReady = Boolean(activeProfile?.baseUrl.trim() && activeProfile?.model.trim() && activeProfile && (!providerRequiresKey(activeProfile) || activeProfile.apiKey.trim()));
   const asrReady = Boolean(settings.asr.wsUrl.trim() && settings.asr.apiKey.trim() && (settings.asr.protocol !== "aliyun-nls" || settings.asr.appKey?.trim()));
   const hasMaterials = Boolean(materials.resume.trim() || materials.jobDescription.trim() || materials.personalNotes.trim() || materials.candidateSummary.trim() || materials.jobSummary.trim() || materials.repository?.summary.trim());
   const sessionStage: SessionStage = answerStatus === "generating" ? "answering" : answerStatus === "complete" ? "complete" : !sessionActive ? "idle" : sessionMode === "answer" ? "manual" : asrStatus === "finalizing" ? "finalizing" : "listening";
@@ -343,9 +351,6 @@ function App() {
     });
     setNotice("已切换到已保存的 ASR 预配置；该预配置的凭证和高级参数会保留在本机。");
   }
-  function updateProfile<K extends keyof LlmProfile>(id: string, key: K, value: LlmProfile[K]) {
-    setSettings((state) => ({ ...state, llmProfiles: state.llmProfiles.map((item) => item.id === id ? { ...item, [key]: value } : item) }));
-  }
   function saveConfiguration() {
     saveSettings(settings);
     setNotice("服务配置已保存到本机。");
@@ -353,7 +358,58 @@ function App() {
   function duplicateProfile(profile: LlmProfile) {
     const copy: LlmProfile = { ...profile, id: crypto.randomUUID(), name: `${profile.name} 副本` };
     setSettings((state) => ({ ...state, llmProfiles: [...state.llmProfiles, copy], activeLlmProfileId: copy.id }));
+    setExpandedProfileIds((ids) => ids.includes(copy.id) ? ids : [...ids, copy.id]);
     setNotice(`已复制模型配置：${copy.name}`);
+  }
+  function addProfileFromPreset(presetId: LlmProviderPresetId = "custom") {
+    const profile = applyLlmProviderPreset(createDefaultLlmProfile(), presetId);
+    setSettings((state) => ({ ...state, llmProfiles: [...state.llmProfiles, profile], activeLlmProfileId: profile.id }));
+    setExpandedProfileIds((ids) => ids.includes(profile.id) ? ids : [...ids, profile.id]);
+    setNotice(`已添加 ${providerLabel(profile)} 配置，请填写 Key 后测试连接。`);
+  }
+  function applyProfilePreset(profileId: string, presetId: LlmProviderPresetId) {
+    setSettings((state) => ({
+      ...state,
+      llmProfiles: state.llmProfiles.map((profile) => profile.id === profileId ? applyLlmProviderPreset(profile, presetId) : profile),
+    }));
+    setProfileModelStates((state) => ({ ...state, [profileId]: { status: "idle", models: [] } }));
+    setNotice("已应用 Provider 预配置；现有 Key 和自定义回答策略会保留。保存后即可在本机复用。");
+  }
+  function removeProfile(profileId: string) {
+    if (settings.activeLlmProfileId === profileId) {
+      setNotice("当前启用的模型不能直接删除，请先切换到其他配置。");
+      return;
+    }
+    setSettings((state) => ({ ...state, llmProfiles: state.llmProfiles.filter((profile) => profile.id !== profileId) }));
+    setExpandedProfileIds((ids) => ids.filter((id) => id !== profileId));
+    setProfileModelStates((state) => { const next = { ...state }; delete next[profileId]; return next; });
+    setProfileTests((state) => { const next = { ...state }; delete next[profileId]; return next; });
+    setNotice("已移除模型配置；当前启用配置未受影响。");
+  }
+  function moveProfile(profileId: string, direction: -1 | 1) {
+    setSettings((state) => {
+      const index = state.llmProfiles.findIndex((profile) => profile.id === profileId);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= state.llmProfiles.length) return state;
+      const profiles = [...state.llmProfiles];
+      [profiles[index], profiles[nextIndex]] = [profiles[nextIndex], profiles[index]];
+      return { ...state, llmProfiles: profiles };
+    });
+  }
+  function toggleProfileExpanded(profileId: string) {
+    setExpandedProfileIds((ids) => ids.includes(profileId) ? ids.filter((id) => id !== profileId) : [...ids, profileId]);
+  }
+  async function loadProfileModels(profile: LlmProfile) {
+    setProfileModelStates((state) => ({ ...state, [profile.id]: { status: "loading", models: state[profile.id]?.models ?? [] } }));
+    try {
+      const models = await listLlmModels(profile);
+      setProfileModelStates((state) => ({ ...state, [profile.id]: { status: "success", models } }));
+      setSettings((state) => ({ ...state, llmProfiles: state.llmProfiles.map((item) => item.id === profile.id ? { ...item, modelOptions: models } : item) }));
+      setNotice(`已获取 ${models.length} 个可用模型：${profile.name}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : typeof error === "string" ? error : "获取模型列表失败";
+      setProfileModelStates((state) => ({ ...state, [profile.id]: { status: "error", models: [], message } }));
+    }
   }
   async function testProfile(profile: LlmProfile) {
     setProfileTests((state) => ({ ...state, [profile.id]: { status: "testing" } }));
@@ -619,7 +675,6 @@ function App() {
         if (payload.command === "start") {
           const mode = payload.testMode ?? testModeRef.current;
           setTestMode(mode);
-          overlayActionsRef.current.start(mode);
         } else if (payload.command === "submit") {
           overlayActionsRef.current.submit();
         } else if (payload.command === "stop") {
@@ -677,7 +732,7 @@ function App() {
       {tab === "materials" && <section className="materials-grid"><div className="panel"><div className="panel-head"><div><div className="panel-kicker">CANDIDATE CONTEXT</div><h2>候选人材料</h2><p>可选：PDF、DOCX、TXT 或直接粘贴。</p></div><button onClick={() => importMaterial("resume")}>导入简历</button></div><label>简历原文</label><textarea rows={10} value={materials.resume} onChange={(event) => setMaterials((state) => ({ ...state, resume: event.target.value, confirmed: false }))} /><label>个人补充资料</label><textarea rows={5} value={materials.personalNotes} onChange={(event) => setMaterials((state) => ({ ...state, personalNotes: event.target.value, confirmed: false }))} /></div><div className="panel"><div className="panel-head"><div><div className="panel-kicker">TARGET ROLE</div><h2>目标岗位</h2><p>可选：一次会话仅使用一份 JD。</p></div><button onClick={() => importMaterial("jobDescription")}>导入 JD</button></div><label>岗位描述</label><textarea rows={10} value={materials.jobDescription} onChange={(event) => setMaterials((state) => ({ ...state, jobDescription: event.target.value, confirmed: false }))} /><button className="primary full" onClick={draftSummaries}>生成可编辑摘要草稿</button></div><div className="panel full-width context-panel"><div className="panel-head"><div><div className="panel-kicker">READY FOR LLM</div><h2>确认后的 LLM 上下文</h2><p>只有确认后的摘要才会参与回答，避免模型误用未检查的信息。</p></div><div className="context-actions"><span className={`context-state ${materialClass}`}><i />{materialLabel}</span><button className={materials.confirmed ? "success" : "primary"} onClick={() => setMaterials((state) => ({ ...state, confirmed: !state.confirmed }))}>{materials.confirmed ? "取消确认" : "确认并用于回答"}</button></div></div><div className="summary-grid"><div><label>候选人事实摘要</label><textarea rows={12} value={materials.candidateSummary} onChange={(event) => setMaterials((state) => ({ ...state, candidateSummary: event.target.value, confirmed: false }))} /></div><div><label>岗位要求摘要</label><textarea rows={12} value={materials.jobSummary} onChange={(event) => setMaterials((state) => ({ ...state, jobSummary: event.target.value, confirmed: false }))} /></div></div></div></section>}
       {tab === "materials" && <section className="panel repository-panel"><div className="panel-head"><div><div className="panel-kicker">OPEN SOURCE PROJECT</div><h2>GitHub / Gitee 仓库</h2><p>导入公开仓库的 README、目录和关键配置，用于回答项目与 Vibe Coding 经历问题。</p></div><span className={`context-state ${materials.repository?.confirmed ? "ready" : materials.repository ? "pending" : "muted"}`}><i />{materials.repository?.confirmed ? "已确认" : materials.repository ? "待确认" : "未导入"}</span></div><div className="repository-import-row"><input value={repositoryUrl} onChange={(event) => setRepositoryUrl(event.target.value)} placeholder="https://github.com/owner/repo 或 https://gitee.com/owner/repo" /><button className="primary" disabled={repositoryImporting} onClick={() => void importRepositoryContext()}>{repositoryImporting ? "导入中…" : "导入仓库"}</button></div>{materials.repository && <><div className="repository-meta"><strong>{materials.repository.name}</strong><span>{materials.repository.provider === "github" ? "GitHub" : "Gitee"} · {materials.repository.branch} · {materials.repository.fileTree.split("\n").filter(Boolean).length} 个文件</span></div><label>项目摘要（可编辑）</label><textarea rows={5} value={materials.repository.summary} onChange={(event) => setMaterials((state) => ({ ...state, repository: state.repository ? { ...state.repository, summary: event.target.value, confirmed: false } : state.repository }))} /><label>关键文件与目录（只读预览）</label><textarea className="repository-preview" readOnly rows={8} value={`${materials.repository.fileTree}\n\n${materials.repository.keyFiles}`} /><div className="context-actions repository-actions"><button className={materials.repository.confirmed ? "success" : "primary"} onClick={() => setMaterials((state) => ({ ...state, repository: state.repository ? { ...state.repository, confirmed: !state.repository.confirmed } : state.repository }))}>{materials.repository.confirmed ? "取消用于回答" : "确认并用于回答"}</button><button onClick={() => setMaterials((state) => ({ ...state, repository: undefined }))}>移除仓库</button></div></>}</section>}
       {tab === "settings" && <section className="settings-stack"><div className="panel"><div className="panel-head"><div><h2>实时 ASR Provider</h2><p>选择预配置后，只需填写对应的 Token、AppKey 或 App ID。音频固定为 PCM 16-bit / 单声道 / 16 kHz。</p></div><button className="primary" onClick={saveConfiguration}>保存配置</button></div><div className="asr-presets" role="group" aria-label="语音识别预配置"><button className={settings.asr.preset === "aliyun-trial" ? "active" : ""} onClick={() => selectAsrPreset("aliyun-trial")}>阿里云试用</button><button className={settings.asr.preset === "aliyun-nls" ? "active" : ""} onClick={() => selectAsrPreset("aliyun-nls")}>阿里云正式</button><button className={settings.asr.preset === "volcengine-asr" ? "active" : ""} onClick={() => selectAsrPreset("volcengine-asr")}>豆包流式识别</button><button className={settings.asr.preset === "generic" ? "active" : ""} onClick={() => selectAsrPreset("generic")}>通用 WebSocket</button></div>{settings.asr.protocol === "volcengine-asr" && <p className="config-warning">豆包预配置已填入官方服务地址和 PCM 参数。该服务需要自定义二进制帧及 Authorization 请求头，当前版本暂未接入底层原生传输，不能直接开始识别。</p>}<div className="form-grid"><Field label="名称" value={settings.asr.name} onChange={(value) => updateAsr("name", value)} /><Field label="WebSocket URL" value={settings.asr.wsUrl} onChange={(value) => updateAsr("wsUrl", value)} placeholder="wss://…" /><Field label={settings.asr.protocol === "aliyun-nls" ? "阿里云临时 Token" : settings.asr.protocol === "volcengine-asr" ? "豆包 Access Token" : "API Key"} value={settings.asr.apiKey} type="password" onChange={(value) => updateAsr("apiKey", value)} />{settings.asr.protocol === "aliyun-nls" && <Field label="阿里云 AppKey" value={settings.asr.appKey || ""} onChange={(value) => updateAsr("appKey", value)} />}{settings.asr.protocol === "volcengine-asr" && <><Field label="豆包 App ID" value={settings.asr.appId || ""} onChange={(value) => updateAsr("appId", value)} /><Field label="豆包 Cluster" value={settings.asr.cluster || ""} onChange={(value) => updateAsr("cluster", value)} placeholder="控制台显示的 Cluster ID" /></>}<Field label="超时（ms）" value={String(settings.asr.timeoutMs)} onChange={(value) => updateAsr("timeoutMs", Number(value) || 10000)} /></div><details><summary>高级协议配置</summary><p className="config-note">阿里云预设默认开启中间结果、标点预测和中文数字规范化；豆包预设默认请求 ITN 与标点。多语模型均需要在各自控制台开通或配置。</p><div className="form-grid three"><Field label="音频封装" value={settings.asr.audioMode} onChange={(value) => updateAsr("audioMode", value as "binary" | "json-base64")} select={[["binary", "原始二进制 PCM"], ["json-base64", "JSON Base64"]]} /><Field label="事件路径" value={settings.asr.eventPath || ""} onChange={(value) => updateAsr("eventPath", value)} /><Field label="文本路径" value={settings.asr.textPath || ""} onChange={(value) => updateAsr("textPath", value)} /><Field label="增量事件" value={settings.asr.partialEvent || ""} onChange={(value) => updateAsr("partialEvent", value)} /><Field label="最终事件" value={settings.asr.finalEvent || ""} onChange={(value) => updateAsr("finalEvent", value)} /><Field label="错误事件" value={settings.asr.errorEvent || ""} onChange={(value) => updateAsr("errorEvent", value)} /></div><label>初始化消息 JSON</label><textarea rows={3} value={settings.asr.initMessage} onChange={(event) => updateAsr("initMessage", event.target.value)} /><label>JSON/Base64 音频模板（使用 {'{{base64}}'}）</label><textarea rows={2} value={settings.asr.audioTemplate} onChange={(event) => updateAsr("audioTemplate", event.target.value)} /><label>结束/Flush 消息 JSON</label><textarea rows={2} value={settings.asr.finalizeMessage} onChange={(event) => updateAsr("finalizeMessage", event.target.value)} /></details><label className="checkbox"><input type="checkbox" checked={settings.asr.debug} onChange={(event) => updateAsr("debug", event.target.checked)} />显示 ASR 原始消息调试日志</label></div>
-        <div className="panel"><div className="panel-head"><div><h2>文本模型 Profiles</h2><p>按卡片管理 Provider；基础字段保留在卡片内，高级配置可展开。</p></div><button onClick={() => { const profile = createDefaultLlmProfile(); setSettings((state) => ({ ...state, llmProfiles: [...state.llmProfiles, profile], activeLlmProfileId: profile.id })); }}>添加模型</button></div>{settings.llmProfiles.map((profile) => { const test = profileTests[profile.id] ?? { status: "idle" as const }; return <div key={profile.id} className={`profile ${profile.id === settings.activeLlmProfileId ? "active-profile" : ""}`}><div className="profile-title"><div className="profile-identity"><strong>{profile.name || "未命名模型"}</strong><span>{profile.protocol === "responses" ? "Responses API" : "Chat Completions"} · {profile.model || "未填写模型"}</span></div><div className="profile-actions"><label className="radio"><input type="radio" checked={profile.id === settings.activeLlmProfileId} onChange={() => setSettings((state) => ({ ...state, activeLlmProfileId: profile.id }))} />当前</label><button onClick={() => void testProfile(profile)} disabled={test.status === "testing"}>{test.status === "testing" ? "测试中…" : "测试连接"}</button><button onClick={() => duplicateProfile(profile)}>复制</button><button className="link danger-text" disabled={settings.llmProfiles.length === 1} onClick={() => setSettings((state) => ({ ...state, llmProfiles: state.llmProfiles.filter((item) => item.id !== profile.id), activeLlmProfileId: state.llmProfiles.find((item) => item.id !== profile.id)?.id || "" }))}>删除</button></div></div><div className="profile-summary"><span>{profile.baseUrl || "未填写 Base URL"}</span>{test.status === "success" && <small className="profile-test-success">可用 · {test.latencyMs} ms · 首 Token {test.firstTokenMs ?? "—"} ms</small>}{test.status === "error" && <small className="profile-test-error">{test.message}</small>}{test.status === "testing" && <small>正在请求模型…</small>}</div><div className="form-grid"><Field label="名称" value={profile.name} onChange={(value) => updateProfile(profile.id, "name", value)} /><Field label="模型" value={profile.model} onChange={(value) => updateProfile(profile.id, "model", value)} /><Field label="Base URL" value={profile.baseUrl} onChange={(value) => updateProfile(profile.id, "baseUrl", value)} placeholder="https://…/v1" /><Field label="Key" value={profile.apiKey} type="password" onChange={(value) => updateProfile(profile.id, "apiKey", value)} /><Field label="上游协议" value={profile.protocol} onChange={(value) => updateProfile(profile.id, "protocol", value as LlmProfile["protocol"])} select={[["responses", "Responses API"], ["chat-completions", "Chat Completions"]]} /><Field label="自定义路径（可选）" value={profile.requestPath || ""} onChange={(value) => updateProfile(profile.id, "requestPath", value)} /><ContextWindowField value={profile.contextWindow || 8000} onChange={(value) => updateProfile(profile.id, "contextWindow", value)} /><Field label="回答精细程度" value={profile.answerDetail || "balanced"} onChange={(value) => updateProfile(profile.id, "answerDetail", value as LlmProfile["answerDetail"])} select={[["concise", "简洁"], ["balanced", "标准"], ["detailed", "详细"]]} /><Field label="思考深度" value={profile.reasoningEffort || "none"} onChange={(value) => updateProfile(profile.id, "reasoningEffort", value as LlmProfile["reasoningEffort"])} select={[["none", "不指定"], ["low", "低"], ["medium", "中"], ["high", "高"]]} /></div><label>额外请求头 JSON</label><textarea rows={2} value={profile.extraHeaders} onChange={(event) => updateProfile(profile.id, "extraHeaders", event.target.value)} /><div className="config-preview"><div><strong>config.toml 预览</strong><span>Key 会直接显示</span></div><textarea readOnly rows={8} value={profileConfigPreview(profile, settings.interviewFocus)} /></div></div>; })}</div>
+        <LlmProviderPanel settings={settings} setSettings={setSettings} profileTests={profileTests} profileModelStates={profileModelStates} profileQuery={profileQuery} profileSort={profileSort} expandedProfileIds={expandedProfileIds} setProfileQuery={setProfileQuery} setProfileSort={setProfileSort} onToggleExpanded={toggleProfileExpanded} onAddPreset={addProfileFromPreset} onApplyPreset={applyProfilePreset} onDuplicate={duplicateProfile} onRemove={removeProfile} onMove={moveProfile} onTest={testProfile} onLoadModels={loadProfileModels} onSave={saveConfiguration} />
         <div className="panel"><div className="panel-head"><div><h2>回答策略</h2><p>决定模型在技术问题中优先强调的表达维度。</p></div></div><div className="form-grid"><Field label="面试方向" value={settings.interviewFocus} onChange={(value) => setSettings((state) => ({ ...state, interviewFocus: value as InterviewFocus }))} select={Object.entries(INTERVIEW_FOCUS_LABELS)} /></div></div>
         <div className="panel"><div className="panel-head"><div><h2>全局快捷键</h2><p>关闭后不会注册或响应该快捷键。</p></div><label className="checkbox shortcut-toggle"><input type="checkbox" checked={settings.shortcutEnabled} onChange={(event) => setSettings((state) => ({ ...state, shortcutEnabled: event.target.checked }))} />启用快捷键</label></div><div className="shortcut-field"><span>快捷键</span><ShortcutRecorder value={settings.shortcut} onChange={(value) => setSettings((state) => ({ ...state, shortcut: value }))} /></div></div>
         <div className="panel"><div className="panel-head"><div><h2>界面行为</h2><p>分别控制转写区和回答区是否响应鼠标滚轮。</p></div></div><div className="settings-toggle-grid"><label className="checkbox"><input type="checkbox" checked={settings.wheelScroll.transcript} onChange={(event) => setSettings((state) => ({ ...state, wheelScroll: { ...state.wheelScroll, transcript: event.target.checked } }))} />转写区允许滚轮滚动</label><label className="checkbox"><input type="checkbox" checked={settings.wheelScroll.answer} onChange={(event) => setSettings((state) => ({ ...state, wheelScroll: { ...state.wheelScroll, answer: event.target.checked } }))} />回答区允许滚轮滚动</label></div></div></section>}
@@ -687,6 +742,119 @@ function App() {
       })() : <><div className="panel-head"><div><h2>面试会话记录</h2><p>每次启动测试都会创建一场面试；不保存音频。</p></div><button className="danger" onClick={() => { clearHistory(); setHistory([]); setSelectedHistorySessionId(undefined); }}>清空记录</button></div>{history.length ? <div className="history-list">{history.map((session) => <button className="history-summary" key={session.id} onClick={() => setSelectedHistorySessionId(session.id)}><strong>{session.title}</strong><span>{new Date(session.updatedAt).toLocaleString()} · {session.turns.length} 轮问答{session.carriedTurnCount ? ` · 承接 ${session.carriedTurnCount} 轮` : ""}</span><small>{session.asrName} → {session.llmName}</small></button>)}</div> : <p className="empty">还没有面试会话记录。</p>}</>}</section>}
     </section>
   </main>;
+}
+
+function LlmProviderPanel({
+  settings,
+  setSettings,
+  profileTests,
+  profileModelStates,
+  profileQuery,
+  profileSort,
+  expandedProfileIds,
+  setProfileQuery,
+  setProfileSort,
+  onToggleExpanded,
+  onAddPreset,
+  onApplyPreset,
+  onDuplicate,
+  onRemove,
+  onMove,
+  onTest,
+  onLoadModels,
+  onSave,
+}: {
+  settings: AppSettings;
+  setSettings: Dispatch<SetStateAction<AppSettings>>;
+  profileTests: Record<string, ProfileTestState>;
+  profileModelStates: Record<string, ProfileModelState>;
+  profileQuery: string;
+  profileSort: ProfileSort;
+  expandedProfileIds: string[];
+  setProfileQuery: (value: string) => void;
+  setProfileSort: (value: ProfileSort) => void;
+  onToggleExpanded: (id: string) => void;
+  onAddPreset: (id?: LlmProviderPresetId) => void;
+  onApplyPreset: (id: string, preset: LlmProviderPresetId) => void;
+  onDuplicate: (profile: LlmProfile) => void;
+  onRemove: (id: string) => void;
+  onMove: (id: string, direction: -1 | 1) => void;
+  onTest: (profile: LlmProfile) => void;
+  onLoadModels: (profile: LlmProfile) => void;
+  onSave: () => void;
+}) {
+  const visibleProfiles = useMemo(() => {
+    const query = profileQuery.trim().toLowerCase();
+    const filtered = settings.llmProfiles.filter((profile) => {
+      if (!query) return true;
+      return [profile.name, providerLabel(profile), profile.baseUrl, profile.model].some((value) => value?.toLowerCase().includes(query));
+    });
+    return filtered.sort((left, right) => {
+      if (profileSort === "name") return left.name.localeCompare(right.name, "zh-CN");
+      if (profileSort === "updated") {
+        const leftState = profileTests[left.id]?.status === "success" ? 1 : 0;
+        const rightState = profileTests[right.id]?.status === "success" ? 1 : 0;
+        return rightState - leftState || left.name.localeCompare(right.name, "zh-CN");
+      }
+      return (left.id === settings.activeLlmProfileId ? -1 : 1) - (right.id === settings.activeLlmProfileId ? -1 : 1);
+    });
+  }, [profileQuery, profileSort, profileTests, settings.llmProfiles, settings.activeLlmProfileId]);
+
+  function updateProfile<K extends keyof LlmProfile>(id: string, key: K, value: LlmProfile[K]) {
+    setSettings((state) => ({ ...state, llmProfiles: state.llmProfiles.map((item) => item.id === id ? { ...item, [key]: value } : item) }));
+  }
+
+  return <div className="panel provider-manager-panel">
+    <div className="panel-head provider-manager-head">
+      <div><div className="panel-kicker">MODEL PROVIDERS</div><h2>文本模型 Provider</h2><p>像 CC Switch 一样集中管理预配置、启用状态、测速和模型列表。</p></div>
+      <div className="provider-manager-actions"><button onClick={() => onAddPreset()}>添加自定义</button><button className="primary" onClick={onSave}>保存配置</button></div>
+    </div>
+    <div className="provider-toolbar">
+      <label className="provider-search"><span>搜索</span><input value={profileQuery} onChange={(event) => setProfileQuery(event.target.value)} placeholder="名称、Provider、模型或地址" /></label>
+      <label className="provider-sort"><span>排序</span><select value={profileSort} onChange={(event) => setProfileSort(event.target.value as ProfileSort)}><option value="active">当前启用优先</option><option value="name">名称</option><option value="updated">最近测试可用</option></select></label>
+      <span className="provider-count">{visibleProfiles.length} / {settings.llmProfiles.length} 个配置</span>
+    </div>
+    <div className="provider-preset-strip" aria-label="新增 Provider 预配置">
+      {LLM_PROVIDER_PRESETS.map((preset) => <button key={preset.id} title={preset.description} onClick={() => onAddPreset(preset.id)}><strong>{preset.label}</strong><small>{preset.defaultModel || "填写模型"}</small></button>)}
+    </div>
+    <div className="provider-list">
+      {visibleProfiles.length === 0 && <div className="provider-empty">没有匹配的模型配置。</div>}
+      {visibleProfiles.map((profile) => {
+        const test = profileTests[profile.id] ?? { status: "idle" as const };
+        const modelState = profileModelStates[profile.id] ?? { status: "idle" as const, models: profile.modelOptions ?? [] };
+        const expanded = expandedProfileIds.includes(profile.id);
+        const active = profile.id === settings.activeLlmProfileId;
+        const health = test.status === "success" ? "healthy" : test.status === "error" ? "error" : "idle";
+        return <article key={profile.id} className={`provider-card ${active ? "active-provider" : ""} ${expanded ? "expanded" : ""}`}>
+          <div className="provider-card-head">
+            <div className="provider-card-identity"><span className={`provider-health ${health}`} /><div><strong>{profile.name || "未命名模型"}</strong><span>{providerLabel(profile)} · {profile.protocol === "responses" ? "Responses API" : "Chat Completions"} · {profile.model || "未填写模型"}</span></div></div>
+            <div className="provider-card-actions">
+              <label className="radio provider-active-toggle"><input type="radio" checked={active} onChange={() => setSettings((state) => ({ ...state, activeLlmProfileId: profile.id }))} />启用</label>
+              <button title="上移" onClick={() => onMove(profile.id, -1)}>↑</button><button title="下移" onClick={() => onMove(profile.id, 1)}>↓</button>
+              <button onClick={() => onToggleExpanded(profile.id)}>{expanded ? "收起" : "编辑"}</button>
+              <button onClick={() => onTest(profile)} disabled={test.status === "testing"}>{test.status === "testing" ? "测速中…" : "测速"}</button>
+              <button onClick={() => onLoadModels(profile)} disabled={modelState.status === "loading"}>{modelState.status === "loading" ? "读取中…" : "模型列表"}</button>
+              <button onClick={() => onDuplicate(profile)}>复制</button>
+              <button className="link danger-text" disabled={active} onClick={() => onRemove(profile.id)}>删除</button>
+            </div>
+          </div>
+          <div className="provider-card-meta"><span>{profile.baseUrl || "未填写 Base URL"}</span><span>{test.status === "success" ? `可用 · ${test.latencyMs} ms · 首 Token ${test.firstTokenMs ?? "—"} ms` : test.status === "error" ? test.message : "尚未测试"}</span><span>{modelState.models.length ? `${modelState.models.length} 个模型` : "未读取模型列表"}</span></div>
+          {expanded && <div className="provider-card-editor">
+            <div className="provider-editor-top"><Field label="Provider 预配置" value={profile.preset ?? profile.provider ?? "custom"} onChange={(value) => onApplyPreset(profile.id, value as LlmProviderPresetId)} select={[["custom", "自定义 Provider"], ...LLM_PROVIDER_PRESETS.map((preset) => [preset.id, preset.label] as [string, string])]} /><Field label="名称" value={profile.name} onChange={(value) => updateProfile(profile.id, "name", value)} /></div>
+            <div className="form-grid"><ModelField profile={profile} models={modelState.models} onChange={(value) => updateProfile(profile.id, "model", value)} /><Field label="Base URL" value={profile.baseUrl} onChange={(value) => updateProfile(profile.id, "baseUrl", value)} placeholder="https://…/v1" /><Field label="Key" value={profile.apiKey} type="password" onChange={(value) => updateProfile(profile.id, "apiKey", value)} /><Field label="上游协议" value={profile.protocol} onChange={(value) => updateProfile(profile.id, "protocol", value as LlmProfile["protocol"])} select={[["responses", "Responses API"], ["chat-completions", "Chat Completions"]]} /><Field label="自定义路径（可选）" value={profile.requestPath || ""} onChange={(value) => updateProfile(profile.id, "requestPath", value)} /><ContextWindowField value={profile.contextWindow || 8000} onChange={(value) => updateProfile(profile.id, "contextWindow", value)} /><Field label="回答精细程度" value={profile.answerDetail || "balanced"} onChange={(value) => updateProfile(profile.id, "answerDetail", value as LlmProfile["answerDetail"])} select={[["concise", "简洁"], ["balanced", "标准"], ["detailed", "详细"]]} /><Field label="思考深度" value={profile.reasoningEffort || "none"} onChange={(value) => updateProfile(profile.id, "reasoningEffort", value as LlmProfile["reasoningEffort"])} select={[["none", "不指定"], ["low", "低"], ["medium", "中"], ["high", "高"]]} /></div>
+            <label>额外请求头 JSON</label><textarea rows={2} value={profile.extraHeaders || ""} onChange={(event) => updateProfile(profile.id, "extraHeaders", event.target.value)} />
+            {modelState.status === "error" && <p className="provider-inline-error">{modelState.message}</p>}
+            <div className="config-preview"><div><strong>config.toml 预览</strong><span>Key 默认隐藏</span></div><textarea readOnly rows={8} value={profileConfigPreview(profile, settings.interviewFocus)} /></div>
+          </div>}
+        </article>;
+      })}
+    </div>
+  </div>;
+}
+
+function ModelField({ profile, models, onChange }: { profile: LlmProfile; models: string[]; onChange: (value: string) => void }) {
+  const listId = `models-${profile.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  return <label className="field"><span>模型{models.length ? ` · ${models.length} 个可选` : ""}</span><input list={listId} value={profile.model} placeholder="填写模型 ID" onChange={(event) => onChange(event.target.value)} />{models.length > 0 && <datalist id={listId}>{models.map((model) => <option key={model} value={model} />)}</datalist>}</label>;
 }
 
 function Field({ label, value, onChange, type = "text", placeholder, select }: { label: string; value: string; onChange: (value: string) => void; type?: string; placeholder?: string; select?: Array<[string, string]> }) {
