@@ -240,9 +240,11 @@ function App() {
       onStatus: (status) => setAsrStatus(status),
       onPartial: setPartial,
       onFinal: (text) => {
-        setQuestion((current) => current ? `${current}${text}` : text);
+        const completeQuestion = questionRef.current ? `${questionRef.current}${text}` : text;
+        questionRef.current = completeQuestion;
+        setQuestion(completeQuestion);
         setPartial("");
-        if (pendingRef.current && mode === "all") void generateAnswer(text || questionRef.current);
+        if (pendingRef.current && mode === "all") void generateAnswer(completeQuestion);
         if (pendingRef.current && mode === "asr") {
           pendingRef.current = false;
           setAsrStatus("listening");
