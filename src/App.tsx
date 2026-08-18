@@ -893,8 +893,8 @@ function App() {
         </div>
         <div className="panel answer-panel">
           <div className="panel-head"><div><div className="panel-kicker">AI RESPONSE</div><h2>中文回答</h2><p>{INTERVIEW_FOCUS_LABELS[settings.interviewFocus]} · {activeProfile?.answerDetail === "detailed" ? "详细" : activeProfile?.answerDetail === "concise" ? "简洁" : "标准"}</p></div><span className={`answer-status ${answerStatus}`}>{answerStatus === "generating" ? "流式生成中" : answerStatus === "complete" ? "已完成" : answerStatus === "error" ? "生成失败" : "等待问题"}</span></div>
+          <div className="answer-toolbar answer-toolbar-top"><button onClick={() => void copyAnswer()} disabled={!answer}>复制回答</button><button onClick={() => void showOverlay()}>打开悬浮窗</button><button className="primary" disabled={!sessionActive || !question || answerStatus === "generating" || !llmReady} onClick={() => void generateAnswer(question)}>用当前文本生成</button></div>
           <AnswerView answer={answer} wheelEnabled={settings.wheelScroll.answer} />
-          <div className="answer-toolbar"><button onClick={() => void copyAnswer()} disabled={!answer}>复制回答</button><button onClick={() => void showOverlay()}>打开悬浮窗</button><button className="primary" disabled={!sessionActive || !question || answerStatus === "generating" || !llmReady} onClick={() => void generateAnswer(question)}>用当前文本生成</button></div>
         </div>
         {settings.asr.debug && <div className="panel debug-panel"><h2>ASR 调试消息</h2><pre>{debug.join("\n\n") || "等待 WebSocket 消息…"}</pre></div>}
       </section>}

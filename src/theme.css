@@ -135,7 +135,7 @@ button { white-space: nowrap; }
 .live-dot::before { display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: #43d9a2; content: ""; box-shadow: 0 0 0 3px rgba(67, 217, 162, .12); }
 .text-button { padding: 0; color: #8da4e9; background: transparent; box-shadow: none; font-size: 11px; }
 .text-button:hover:not(:disabled) { color: #c6d1ff; background: transparent; transform: none; }
-.answer-panel { display: flex; flex-direction: column; }
+.answer-panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .answer-panel > .answer-content { flex: 1; }
 .answer-panel > .answer-empty { flex: 1; }
 .transcript { height: 92px; min-height: 92px; overflow: auto; overscroll-behavior: contain; }
@@ -146,9 +146,10 @@ button { white-space: nowrap; }
 .answer-section p { margin: 0; color: #e8efff; white-space: pre-wrap; line-height: 1.75; }
 .answer-section.outline { padding-bottom: 14px; border-bottom: 1px solid #273751; }
 .answer-section.outline p { color: #c6d5f0; }
-.answer-empty { display: grid; align-content: center; min-height: 310px; padding: 20px; border: 1px dashed #2b3b58; border-radius: 9px; color: #7e8eaa; background: #0e1626; text-align: center; }
+.answer-empty { display: grid; align-content: center; min-height: 0; padding: 20px; border: 1px dashed #2b3b58; border-radius: 9px; color: #7e8eaa; background: #0e1626; text-align: center; }
 .answer-empty strong { color: #c5d2eb; font-size: 14px; }.answer-empty span { margin-top: 7px; font-size: 12px; }
 .answer-toolbar { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.answer-toolbar-top { flex: 0 0 auto; margin: 10px 0 0; padding-bottom: 2px; }
 .context-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
 .context-state { display: inline-flex; align-items: center; gap: 7px; padding: 7px 9px; border: 1px solid #2b3b58; border-radius: 999px; color: #a9b7ce; background: #111b2d; font-size: 11px; white-space: nowrap; }
 .context-state.ready { color: #a8f2d2; border-color: #24674f; background: #102c27; }.context-state.pending { color: #f6d58d; border-color: #745c29; background: #2b2412; }
