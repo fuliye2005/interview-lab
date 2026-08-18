@@ -49,6 +49,8 @@ export interface StorageDiagnostics {
   uncleanExit: boolean;
   lastStartedAt?: string;
   lastCleanShutdownAt?: string;
+  recoveryPerformed?: boolean;
+  recoveryMessage?: string;
 }
 
 interface RuntimeMarker {
@@ -65,7 +67,7 @@ interface PersistentContext {
   secretCache: Map<string, string>;
   writeQueue: Promise<void>;
   lastBackupAt: number;
-  startup: { uncleanExit: boolean; lastStartedAt?: string; lastCleanShutdownAt?: string };
+  startup: { uncleanExit: boolean; lastStartedAt?: string; lastCleanShutdownAt?: string; recoveryPerformed?: boolean; recoveryMessage?: string };
 }
 
 let contextPromise: Promise<PersistentContext> | undefined;
@@ -416,6 +418,21 @@ async function replaceHistory(context: PersistentContext, history: InterviewSess
   }
 }
 
+async function readLatestBackup(context: PersistentContext): Promise<PersistentSnapshot | undefined> {
+  const rows = await context.db.select<Array<{ settings_payload: string; materials_payload: string; history_payload: string }>>("SELECT settings_payload, materials_payload, history_payload FROM storage_backups ORDER BY id DESC LIMIT 1");
+  const row = rows[0];
+  if (!row) return undefined;
+  try {
+    return {
+      settings: normalizeSettings(JSON.parse(row.settings_payload) as Partial<AppSettings>),
+      materials: normalizeMaterials(JSON.parse(row.materials_payload)),
+      history: normalizeHistory(JSON.parse(row.history_payload)),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 async function maybeCreateBackup(context: PersistentContext, reason: string) {
   if (Date.now() - context.lastBackupAt < BACKUP_INTERVAL_MS) return;
   await context.db.execute(
@@ -504,10 +521,52 @@ async function createTauriContext(): Promise<PersistentContext> {
     window.localStorage.removeItem(MATERIALS_KEY);
     window.localStorage.removeItem(HISTORY_KEY);
   } else {
-    const storedSettings = settingsRows[0]?.payload ? normalizeSettings(JSON.parse(settingsRows[0].payload) as Partial<AppSettings>) : defaultSettings();
-    const storedMaterials = materialsRows[0]?.payload ? normalizeMaterials(JSON.parse(materialsRows[0].payload)) : emptyMaterials();
-    const storedHistory = normalizeHistory(historyRows.map((row) => JSON.parse(row.payload)));
-    context.snapshot = { settings: await hydrateSecrets(context, storedSettings), materials: storedMaterials, history: storedHistory };
+    let storedSettings = defaultSettings();
+    let storedMaterials = emptyMaterials();
+    let storedHistory: InterviewSession[] = [];
+    let settingsHealthy = true;
+    let materialsHealthy = true;
+    let historyHealthy = true;
+    try {
+      storedSettings = settingsRows[0]?.payload ? normalizeSettings(JSON.parse(settingsRows[0].payload) as Partial<AppSettings>) : defaultSettings();
+    } catch {
+      settingsHealthy = false;
+    }
+    try {
+      storedMaterials = materialsRows[0]?.payload ? normalizeMaterials(JSON.parse(materialsRows[0].payload)) : emptyMaterials();
+    } catch {
+      materialsHealthy = false;
+    }
+    try {
+      storedHistory = normalizeHistory(historyRows.map((row) => JSON.parse(row.payload)));
+    } catch {
+      historyHealthy = false;
+    }
+    const recoveryTargets = [
+      !settingsHealthy ? "模型与应用配置" : "",
+      !materialsHealthy ? "候选人材料" : "",
+      !historyHealthy ? "面试会话" : "",
+    ].filter(Boolean);
+    if (recoveryTargets.length) {
+      const backup = await readLatestBackup(context);
+      if (backup) {
+        if (!settingsHealthy) storedSettings = backup.settings;
+        if (!materialsHealthy) storedMaterials = backup.materials;
+        if (!historyHealthy) storedHistory = backup.history;
+        context.startup.recoveryPerformed = true;
+        context.startup.recoveryMessage = `启动时已从最近备份恢复：${recoveryTargets.join("、")}。`;
+      } else {
+        context.startup.recoveryMessage = `检测到无法解析的${recoveryTargets.join("、")}，但没有可用备份；其余数据保持不变。`;
+      }
+    }
+    const hydratedSettings = await hydrateSecrets(context, storedSettings);
+    context.snapshot = { settings: hydratedSettings, materials: storedMaterials, history: storedHistory };
+    if (context.startup.recoveryPerformed) {
+      await writeSecrets(context, hydratedSettings);
+      await upsertDocument(context, "settings", redactSettings(hydratedSettings));
+      await upsertDocument(context, "materials", storedMaterials);
+      await replaceHistory(context, storedHistory);
+    }
   }
   await upsertDocument(context, "runtime", { state: "running", startedAt });
   return context;
@@ -552,6 +611,8 @@ export async function getStorageDiagnostics(): Promise<StorageDiagnostics> {
       uncleanExit: context.startup.uncleanExit,
       lastStartedAt: context.startup.lastStartedAt,
       lastCleanShutdownAt: context.startup.lastCleanShutdownAt,
+      recoveryPerformed: context.startup.recoveryPerformed,
+      recoveryMessage: context.startup.recoveryMessage,
     };
   } catch {
     return { backend: "sqlite", schemaVersion: 0, integrity: "error", secretStore: "stronghold", backupCount: 0, uncleanExit: false };
@@ -576,13 +637,11 @@ export async function restoreLatestBackup(): Promise<PersistentSnapshot | undefi
   if (!context) return undefined;
   let restored: PersistentSnapshot | undefined;
   await enqueue(context, async () => {
-    const rows = await context.db.select<Array<{ settings_payload: string; materials_payload: string; history_payload: string }>>("SELECT settings_payload, materials_payload, history_payload FROM storage_backups ORDER BY id DESC LIMIT 1");
-    const row = rows[0];
-    if (!row) return;
-    const backupSettings = normalizeSettings(JSON.parse(row.settings_payload) as Partial<AppSettings>);
-    const settings = await hydrateSecrets(context, backupSettings);
-    const materials = normalizeMaterials(JSON.parse(row.materials_payload));
-    const history = normalizeHistory(JSON.parse(row.history_payload));
+    const backup = await readLatestBackup(context);
+    if (!backup) return;
+    const settings = await hydrateSecrets(context, backup.settings);
+    const materials = backup.materials;
+    const history = backup.history;
     await writeSecrets(context, settings);
     await upsertDocument(context, "settings", redactSettings(settings));
     await upsertDocument(context, "materials", materials);
