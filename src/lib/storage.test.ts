@@ -54,8 +54,8 @@ describe("loadHistory", () => {
 
 describe("loadSettings", () => {
   it("keeps wheel scrolling disabled by default and merges partial legacy settings", () => {
-    setStoredSettings({ wheelScroll: { answer: true } });
+    setStoredSettings({ wheelScroll: { answer: true }, shortcutEnabled: false });
 
-    expect(loadSettings().wheelScroll).toEqual({ transcript: false, answer: true });
+    expect(loadSettings()).toMatchObject({ wheelScroll: { transcript: false, answer: true }, shortcutEnabled: false });
   });
 });

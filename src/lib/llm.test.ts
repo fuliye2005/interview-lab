@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildInterviewPrompt, sanitizeAnswerText, selectInterviewContext, streamLlm } from "./llm";
+import { buildInterviewPrompt, sanitizeAnswerText, selectInterviewContext, streamLlm, testLlmConnection } from "./llm";
 import type { LlmProfile, MaterialContext } from "../types";
 
 const materials: MaterialContext = {
@@ -137,6 +137,15 @@ describe("streamLlm reasoning settings", () => {
     const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
     expect(body.reasoning).toEqual({ effort: "high" });
     expect(body).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("returns latency metrics for a connection test", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse());
+
+    const result = await testLlmConnection(profile());
+
+    expect(result.latencyMs).toBeGreaterThanOrEqual(0);
+    expect(result.firstTokenMs).toBeGreaterThanOrEqual(0);
   });
 });
 

@@ -56,6 +56,20 @@ export interface MaterialContext {
   candidateSummary: string;
   jobSummary: string;
   confirmed: boolean;
+  repository?: RepositoryContext;
+}
+
+export interface RepositoryContext {
+  url: string;
+  provider: "github" | "gitee";
+  name: string;
+  branch: string;
+  description: string;
+  fileTree: string;
+  keyFiles: string;
+  summary: string;
+  confirmed: boolean;
+  importedAt: string;
 }
 
 export interface SessionRecord {
@@ -99,6 +113,7 @@ export interface AppSettings {
   llmProfiles: LlmProfile[];
   activeLlmProfileId: string;
   shortcut: string;
+  shortcutEnabled: boolean;
   interviewFocus: InterviewFocus;
   sessionTitleDraft: string;
   wheelScroll: WheelScrollSettings;

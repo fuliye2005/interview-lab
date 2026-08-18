@@ -11,6 +11,7 @@ export const defaultSettings = (): AppSettings => ({
   llmProfiles: [createDefaultLlmProfile()],
   activeLlmProfileId: "",
   shortcut: "Ctrl+Shift+Space",
+  shortcutEnabled: true,
   interviewFocus: "technical-business",
   sessionTitleDraft: "",
   wheelScroll: { transcript: false, answer: false },
@@ -75,6 +76,7 @@ export function loadSettings(): AppSettings {
     asr: activeAsr,
     asrProfiles: { ...fallback.asrProfiles, ...asrProfiles, [activePreset]: activeAsr },
     llmProfiles,
+    shortcutEnabled: typeof stored.shortcutEnabled === "boolean" ? stored.shortcutEnabled : fallback.shortcutEnabled,
     interviewFocus: isInterviewFocus(stored.interviewFocus) ? stored.interviewFocus : fallback.interviewFocus,
     sessionTitleDraft: typeof stored.sessionTitleDraft === "string" ? stored.sessionTitleDraft : fallback.sessionTitleDraft,
     wheelScroll: { ...fallback.wheelScroll, ...storedWheelScroll },
@@ -90,7 +92,7 @@ function isInterviewFocus(value: unknown): value is InterviewFocus {
 }
 
 export const saveSettings = (settings: AppSettings) => write(SETTINGS_KEY, settings);
-export const loadMaterials = () => read(MATERIALS_KEY, emptyMaterials());
+export const loadMaterials = () => ({ ...emptyMaterials(), ...read<Partial<MaterialContext>>(MATERIALS_KEY, emptyMaterials()) });
 export const saveMaterials = (materials: MaterialContext) => write(MATERIALS_KEY, materials);
 function isInterviewSession(value: unknown): value is InterviewSession {
   return typeof value === "object" && value !== null && Array.isArray((value as InterviewSession).turns);
