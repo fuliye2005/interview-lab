@@ -51,12 +51,20 @@ fn stronghold_password(password: &str) -> Vec<u8> {
 }
 
 fn database_migrations() -> Vec<Migration> {
-    vec![Migration {
-        version: 1,
-        description: "create_persistent_state_tables",
-        sql: "CREATE TABLE IF NOT EXISTS app_documents (document_key TEXT PRIMARY KEY, payload TEXT NOT NULL, schema_version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS interview_sessions (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, title TEXT NOT NULL, source_session_id TEXT, carried_turn_count INTEGER NOT NULL DEFAULT 0, asr_name TEXT NOT NULL, llm_name TEXT NOT NULL, payload TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_interview_sessions_updated_at ON interview_sessions(updated_at DESC); CREATE TABLE IF NOT EXISTS storage_backups (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, reason TEXT NOT NULL, settings_payload TEXT NOT NULL, materials_payload TEXT NOT NULL, history_payload TEXT NOT NULL);",
-        kind: MigrationKind::Up,
-    }]
+    vec![
+        Migration {
+            version: 1,
+            description: "create_persistent_state_tables",
+            sql: "CREATE TABLE IF NOT EXISTS app_documents (document_key TEXT PRIMARY KEY, payload TEXT NOT NULL, schema_version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS interview_sessions (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, title TEXT NOT NULL, source_session_id TEXT, carried_turn_count INTEGER NOT NULL DEFAULT 0, asr_name TEXT NOT NULL, llm_name TEXT NOT NULL, payload TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_interview_sessions_updated_at ON interview_sessions(updated_at DESC); CREATE TABLE IF NOT EXISTS storage_backups (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, reason TEXT NOT NULL, settings_payload TEXT NOT NULL, materials_payload TEXT NOT NULL, history_payload TEXT NOT NULL);",
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 2,
+            description: "record_storage_schema_v2",
+            sql: "CREATE TABLE IF NOT EXISTS storage_migration_log (version INTEGER PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL); UPDATE app_documents SET schema_version = 2 WHERE schema_version < 2; INSERT OR IGNORE INTO storage_migration_log (version, description, applied_at) VALUES (2, 'record_storage_schema_v2', datetime('now'));",
+            kind: MigrationKind::Up,
+        },
+    ]
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

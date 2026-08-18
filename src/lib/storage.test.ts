@@ -134,7 +134,9 @@ describe("loadSettings", () => {
     expect(bundle.settings.asr.apiKey).toBe("");
     expect(bundle.settings.asrProfiles["aliyun-trial"]?.apiKey).toBe("");
     expect(bundle.settings.llmProfiles[0].apiKey).toBe("");
-    expect(parseSafeDataBundle(JSON.stringify(bundle))).toMatchObject({ format: "interview-lab-backup", version: 1, history: [] });
+    expect(parseSafeDataBundle(JSON.stringify(bundle))).toMatchObject({ format: "interview-lab-backup", version: 2, history: [] });
+    const legacyBundle = { ...bundle, version: 1 };
+    expect(parseSafeDataBundle(JSON.stringify(legacyBundle))).toMatchObject({ format: "interview-lab-backup", version: 2 });
     const tampered = JSON.parse(JSON.stringify(bundle)) as { settings: typeof bundle.settings };
     tampered.settings.llmProfiles[0].apiKey = "injected-secret";
     tampered.settings.asrProfiles["aliyun-trial"]!.apiKey = "injected-asr-secret";
@@ -145,6 +147,7 @@ describe("loadSettings", () => {
   it("rejects malformed or incompatible backup files before touching storage", () => {
     expect(() => parseSafeDataBundle("not-json")).toThrow("不是合法 JSON");
     expect(() => parseSafeDataBundle(JSON.stringify({ format: "other", version: 1 }))).toThrow("不支持");
-    expect(() => parseSafeDataBundle(JSON.stringify({ format: "interview-lab-backup", version: 1, settings: {}, materials: {} }))).toThrow("缺少配置");
+    expect(() => parseSafeDataBundle(JSON.stringify({ format: "interview-lab-backup", version: 2, settings: {}, materials: {} }))).toThrow("缺少配置");
+    expect(() => parseSafeDataBundle(JSON.stringify({ format: "interview-lab-backup", version: 3, settings: {}, materials: {}, history: [] }))).toThrow("不支持");
   });
 });

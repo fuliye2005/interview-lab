@@ -17,7 +17,7 @@ const buildInfo = {
   version: packageJson.version || "unknown",
   commit: gitCommit,
   builtAt: new Date().toISOString(),
-  dataSchema: 1,
+  dataSchema: 2,
 };
 
 // @ts-expect-error process is a nodejs global

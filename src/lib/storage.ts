@@ -9,6 +9,7 @@ const HISTORY_KEY = "interview-lab.history.v1";
 const DATABASE_PATH = "sqlite:interview-lab.db";
 const STRONGHOLD_CLIENT = "interview-lab";
 const BACKUP_INTERVAL_MS = 5 * 60 * 1000;
+export const DATA_SCHEMA_VERSION = 2;
 
 type SqlResult = { rowsAffected: number; lastInsertId?: number };
 interface SqlDatabase {
@@ -32,7 +33,7 @@ export interface PersistentSnapshot {
 
 export interface SafeDataBundle {
   format: "interview-lab-backup";
-  version: 1;
+  version: 2;
   exportedAt: string;
   note: "API keys are intentionally excluded; re-enter them after import.";
   settings: AppSettings;
@@ -43,6 +44,9 @@ export interface SafeDataBundle {
 export interface StorageDiagnostics {
   backend: "sqlite" | "localStorage";
   schemaVersion: number;
+  migrationStatus: "current" | "outdated" | "unknown" | "error";
+  migrationVersion?: number;
+  migrationDescription?: string;
   integrity: "ok" | "unknown" | "error";
   secretStore: "stronghold" | "browser-not-persisted";
   backupCount: number;
@@ -298,7 +302,7 @@ export function loadHistory(): InterviewSession[] {
 export function createSafeDataBundle(snapshot: PersistentSnapshot): SafeDataBundle {
   return {
     format: "interview-lab-backup",
-    version: 1,
+    version: 2,
     exportedAt: new Date().toISOString(),
     note: "API keys are intentionally excluded; re-enter them after import.",
     settings: redactSettings(snapshot.settings),
@@ -315,12 +319,12 @@ export function parseSafeDataBundle(raw: string): SafeDataBundle {
     throw new Error("备份文件不是合法 JSON");
   }
   if (!value || typeof value !== "object") throw new Error("备份文件格式不正确");
-  const source = value as Partial<SafeDataBundle>;
-  if (source.format !== "interview-lab-backup" || source.version !== 1) throw new Error("不支持的 Interview Lab 备份版本");
+  const source = value as { format?: unknown; version?: unknown; exportedAt?: unknown; settings?: unknown; materials?: unknown; history?: unknown };
+  if (source.format !== "interview-lab-backup" || (source.version !== 1 && source.version !== 2)) throw new Error("不支持的 Interview Lab 备份版本");
   if (!source.settings || !source.materials || !Array.isArray(source.history)) throw new Error("备份文件缺少配置、材料或会话记录");
   return {
     format: "interview-lab-backup",
-    version: 1,
+    version: 2,
     exportedAt: typeof source.exportedAt === "string" ? source.exportedAt : new Date().toISOString(),
     note: "API keys are intentionally excluded; re-enter them after import.",
     settings: redactSettings(normalizeSettings(source.settings as Partial<AppSettings>)),
@@ -415,7 +419,7 @@ async function writeSecrets(context: PersistentContext, settings: AppSettings) {
 async function upsertDocument(context: PersistentContext, key: string, payload: unknown) {
   await context.db.execute(
     "INSERT INTO app_documents (document_key, payload, schema_version, updated_at) VALUES ($1, $2, $3, $4) ON CONFLICT(document_key) DO UPDATE SET payload = excluded.payload, schema_version = excluded.schema_version, updated_at = excluded.updated_at",
-    [key, JSON.stringify(payload), 1, new Date().toISOString()],
+    [key, JSON.stringify(payload), DATA_SCHEMA_VERSION, new Date().toISOString()],
   );
 }
 
@@ -618,18 +622,34 @@ async function getTauriContext() {
 
 export async function getStorageDiagnostics(): Promise<StorageDiagnostics> {
   if (!isTauri()) {
-    return { backend: "localStorage", schemaVersion: 0, integrity: "unknown", secretStore: "browser-not-persisted", backupCount: 0, uncleanExit: false };
+    return { backend: "localStorage", schemaVersion: DATA_SCHEMA_VERSION, migrationStatus: "unknown", integrity: "unknown", secretStore: "browser-not-persisted", backupCount: 0, uncleanExit: false };
   }
   try {
     const context = await getTauriContext();
-    if (!context) return { backend: "localStorage", schemaVersion: 0, integrity: "unknown", secretStore: "browser-not-persisted", backupCount: 0, uncleanExit: false };
-    let schemaVersion = 1;
+    if (!context) return { backend: "localStorage", schemaVersion: DATA_SCHEMA_VERSION, migrationStatus: "unknown", integrity: "unknown", secretStore: "browser-not-persisted", backupCount: 0, uncleanExit: false };
+    let schemaVersion = 0;
+    let migrationStatus: StorageDiagnostics["migrationStatus"] = "unknown";
+    let migrationVersion: number | undefined;
+    let migrationDescription: string | undefined;
     let integrity: StorageDiagnostics["integrity"] = "unknown";
     try {
-      const rows = await context.db.select<Array<{ user_version?: number }>>("PRAGMA user_version");
-      schemaVersion = Number(rows[0]?.user_version) || 1;
+      const rows = await context.db.select<Array<{ version?: number; description?: string; success?: boolean | number }>>("SELECT version, description, success FROM _sqlx_migrations ORDER BY version DESC LIMIT 1");
+      const latest = rows[0];
+      schemaVersion = Number(latest?.version) || 0;
+      migrationStatus = latest && latest.success !== false && latest.success !== 0
+        ? schemaVersion >= DATA_SCHEMA_VERSION ? "current" : "outdated"
+        : "error";
+      migrationVersion = schemaVersion || undefined;
+      migrationDescription = latest?.description;
     } catch {
-      schemaVersion = 1;
+      migrationStatus = "error";
+    }
+    try {
+      const rows = await context.db.select<Array<{ version?: number; description?: string }>>("SELECT version, description FROM storage_migration_log ORDER BY version DESC LIMIT 1");
+      migrationVersion = Number(rows[0]?.version) || undefined;
+      migrationDescription = rows[0]?.description;
+    } catch {
+      if (migrationStatus === "current") migrationStatus = "unknown";
     }
     try {
       const rows = await context.db.select<Array<Record<string, unknown>>>("PRAGMA quick_check");
@@ -642,6 +662,9 @@ export async function getStorageDiagnostics(): Promise<StorageDiagnostics> {
     return {
       backend: "sqlite",
       schemaVersion,
+      migrationStatus,
+      migrationVersion,
+      migrationDescription,
       integrity,
       secretStore: "stronghold",
       backupCount: backups.length,
@@ -653,7 +676,7 @@ export async function getStorageDiagnostics(): Promise<StorageDiagnostics> {
       recoveryMessage: context.startup.recoveryMessage,
     };
   } catch {
-    return { backend: "sqlite", schemaVersion: 0, integrity: "error", secretStore: "stronghold", backupCount: 0, uncleanExit: false };
+    return { backend: "sqlite", schemaVersion: 0, migrationStatus: "error", integrity: "error", secretStore: "stronghold", backupCount: 0, uncleanExit: false };
   }
 }
 

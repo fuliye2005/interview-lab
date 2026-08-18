@@ -6,5 +6,5 @@ export interface BuildInfo {
 }
 
 export const BUILD_INFO: BuildInfo = typeof __INTERVIEW_LAB_BUILD_INFO__ === "undefined"
-  ? { version: "dev", commit: "local", builtAt: "", dataSchema: 1 }
+  ? { version: "dev", commit: "local", builtAt: "", dataSchema: 2 }
   : __INTERVIEW_LAB_BUILD_INFO__;
