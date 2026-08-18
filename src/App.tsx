@@ -29,13 +29,14 @@ type ProfileSort = "active" | "name" | "updated";
 type ProfileModelState = { status: "idle" | "loading" | "success" | "error"; models: string[]; message?: string };
 type AsrProfileTestState = { status: "idle" | "testing" | "success" | "error"; mode?: "connection" | "final"; latencyMs?: number; finalText?: string; errorKind?: string; message?: string; hint?: string };
 type LlmEditorTab = "basic" | "parameters" | "advanced" | "raw";
-type OverlayCommand = { command: "start" | "submit" | "stop" | "stop-generation" | "regenerate" | "hide"; testMode?: TestMode };
+type OverlayCommand = { command: "start" | "submit" | "stop" | "pause" | "stop-generation" | "regenerate" | "hide"; testMode?: TestMode };
 type OverlayState = {
   answer: string;
   question: string;
   lastQuestion: string;
   partial: string;
   sessionActive: boolean;
+  sessionPaused: boolean;
   sessionMode: SessionMode;
   testMode: TestMode;
   answerStatus: AnswerStatus;
@@ -63,6 +64,7 @@ const DEFAULT_OVERLAY_STATE: OverlayState = {
   lastQuestion: "",
   partial: "",
   sessionActive: false,
+  sessionPaused: false,
   sessionMode: "idle",
   testMode: "all",
   answerStatus: "idle",
@@ -255,7 +257,7 @@ function Overlay() {
   const compact = layout === "compact";
   const modeLabel = testMode === "asr" ? "语音转文字" : testMode === "answer" ? "问题回答" : "全部启动";
   const answerLabel = state.answerStatus === "generating" ? "正在生成" : state.answerStatus === "complete" ? "回答完成" : state.answerStatus === "error" ? "生成失败" : "等待回答";
-  const submitDisabled = !state.sessionActive || state.answerStatus === "generating" || (state.sessionMode === "answer" && !questionDraft.trim());
+  const submitDisabled = !state.sessionActive || state.sessionPaused || state.answerStatus === "generating" || (state.sessionMode === "answer" && !questionDraft.trim());
   const regenerateDisabled = !state.sessionActive || state.answerStatus === "generating" || !state.lastQuestion.trim() || !state.llmReady;
   const overlayStyle = { opacity: state.overlaySettings.opacity, "--overlay-font-scale": state.overlaySettings.fontScale } as CSSProperties;
 
@@ -285,7 +287,7 @@ function Overlay() {
         <span>当前轮数：{state.turnCount} · 承接 {state.carriedTurnCount} 轮</span>
         {state.sourceTitle && <span>来源会话：{state.sourceTitle}</span>}
       </aside>}
-      <div className="overlay-actions">{state.sessionActive ? <><button className="danger" onClick={() => sendCommand("stop")}>结束会话</button>{state.answerStatus === "generating" ? <button className="danger" onClick={() => sendCommand("stop-generation")}>停止生成</button> : <button className="primary" disabled={submitDisabled} onClick={() => sendCommand("submit")}>提交当前问题</button>}<button disabled={regenerateDisabled} onClick={() => sendCommand("regenerate")}>重新生成</button></> : <button className="primary" disabled={testMode === "all" ? !state.llmReady || !state.asrReady : testMode === "asr" ? !state.asrReady : !state.llmReady} onClick={() => sendCommand("start")}>启动测试</button>}<span>{copyNotice || state.notice}</span></div>
+      <div className="overlay-actions">{state.sessionActive ? <><button className="danger" onClick={() => sendCommand("stop")}>结束会话</button><button onClick={() => sendCommand("pause")} disabled={state.answerStatus === "generating"}>{state.sessionPaused ? "继续" : "暂停"}</button>{state.answerStatus === "generating" ? <button className="danger" onClick={() => sendCommand("stop-generation")}>停止生成</button> : <button className="primary" disabled={submitDisabled} onClick={() => sendCommand("submit")}>提交当前问题</button>}<button disabled={regenerateDisabled} onClick={() => sendCommand("regenerate")}>重新生成</button></> : <button className="primary" disabled={testMode === "all" ? !state.llmReady || !state.asrReady : testMode === "asr" ? !state.asrReady : !state.llmReady} onClick={() => sendCommand("start")}>启动测试</button>}<span>{copyNotice || state.notice}</span></div>
       <div className="overlay-field-heading"><strong>当前问题</strong><small>{state.sessionMode === "answer" ? "可直接输入并提交" : "可编辑转写文本"}</small></div>
       <textarea className="overlay-question" value={questionDraft} onChange={(event) => changeQuestion(event.target.value)} placeholder="输入或等待当前面试问题…" />
       {showTranscript && <div className="overlay-transcript-block"><div className="overlay-partial" onWheel={(event) => { if (!state.wheelScroll.transcript) event.preventDefault(); }}><span>实时增量转写</span><p>{state.partial || "等待系统音频…"}</p></div></div>}
@@ -306,6 +308,7 @@ function App() {
   const [storageDiagnostics, setStorageDiagnostics] = useState<StorageDiagnostics | null>(null);
   const [storageBundleBusy, setStorageBundleBusy] = useState(false);
   const [sessionActive, setSessionActive] = useState(false);
+  const [sessionPaused, setSessionPaused] = useState(false);
   const [sessionMode, setSessionMode] = useState<SessionMode>("idle");
   const [testMode, setTestMode] = useState<TestMode>("all");
   const [asrStatus, setAsrStatus] = useState<AsrStatus>("idle");
@@ -341,7 +344,7 @@ function App() {
   const overlayBoundWindowRef = useRef<WebviewWindow | null>(null);
   const overlayUnlistenRef = useRef<Array<() => void>>([]);
   const overlayStatePersistTimerRef = useRef<number | undefined>(undefined);
-  const overlayActionsRef = useRef<{ start: (mode: TestMode) => void; submit: () => void; stop: () => void; stopGeneration: () => void; regenerate: () => void }>({ start: () => {}, submit: () => {}, stop: () => {}, stopGeneration: () => {}, regenerate: () => {} });
+  const overlayActionsRef = useRef<{ start: (mode: TestMode) => void; submit: () => void; stop: () => void; pause: () => void; stopGeneration: () => void; regenerate: () => void }>({ start: () => {}, submit: () => {}, stop: () => {}, pause: () => {}, stopGeneration: () => {}, regenerate: () => {} });
   const closeToTrayRef = useRef(true);
   const generationAbortRef = useRef<AbortController | null>(null);
   const lastQuestionRef = useRef("");
@@ -373,7 +376,7 @@ function App() {
   const overlayMaterialsLabel = materials.confirmed ? "已确认并用于回答" : hasMaterials ? "有材料，等待确认" : "未添加材料";
   const sessionStage: SessionStage = answerStatus === "generating" ? "answering" : answerStatus === "complete" ? "complete" : !sessionActive ? "idle" : sessionMode === "answer" ? "manual" : asrStatus === "finalizing" ? "finalizing" : "listening";
   const effectiveAnswerFramework = sessionFrameworkOverride || settings.answerFramework;
-  const statusLabel = sessionStage === "manual" ? "等待输入" : sessionStage === "answering" ? "正在生成回答" : sessionStage === "complete" ? sessionMode === "asr" ? "转写已完成" : "回答已完成" : sessionStage === "listening" ? "正在聆听" : sessionStage === "finalizing" ? "正在提交问题" : sessionStage === "idle" && !llmReady && testMode !== "asr" ? "待配置模型" : sessionStage === "idle" ? "未开始" : "连接异常";
+  const statusLabel = sessionPaused ? "已暂停" : sessionStage === "manual" ? "等待输入" : sessionStage === "answering" ? "正在生成回答" : sessionStage === "complete" ? sessionMode === "asr" ? "转写已完成" : "回答已完成" : sessionStage === "listening" ? "正在聆听" : sessionStage === "finalizing" ? "正在提交问题" : sessionStage === "idle" && !llmReady && testMode !== "asr" ? "待配置模型" : sessionStage === "idle" ? "未开始" : "连接异常";
   testModeRef.current = testMode;
   closeToTrayRef.current = settings.closeToTray;
 
@@ -528,6 +531,7 @@ function App() {
       lastQuestion: lastQuestionRef.current,
       partial,
       sessionActive,
+      sessionPaused,
       sessionMode,
       testMode,
       answerStatus,
@@ -550,7 +554,7 @@ function App() {
     };
     overlayStateRef.current = state;
     void emitTo("answer-overlay", "overlay-state", state).catch(() => undefined);
-  }, [desktopRuntime, isOverlayWindow, answer, question, partial, sessionActive, sessionMode, testMode, answerStatus, asrStatus, turnCount, notice, statusLabel, activeSessionTitle, activeSessionCarriedTurnCount, activeSessionSourceTitle, llmReady, asrReady, contextStats, settings.overlay, settings.wheelScroll, settings.interviewFocus, overlayMaterialsLabel]);
+  }, [desktopRuntime, isOverlayWindow, answer, question, partial, sessionActive, sessionPaused, sessionMode, testMode, answerStatus, asrStatus, turnCount, notice, statusLabel, activeSessionTitle, activeSessionCarriedTurnCount, activeSessionSourceTitle, llmReady, asrReady, contextStats, settings.overlay, settings.wheelScroll, settings.interviewFocus, overlayMaterialsLabel]);
   useEffect(() => {
     if (!desktopRuntime || isOverlayWindow) return;
     let unlisten: () => void = () => {};
@@ -846,6 +850,7 @@ function App() {
       await invoke("start_system_audio_capture");
       beginInterview();
       setSessionActive(true);
+      setSessionPaused(false);
       setSessionMode(mode);
       setAsrStatus("listening");
       setNotice(mode === "asr" ? "正在捕获系统音频并进行语音转文字。原始音频不会保存。" : materials.confirmed ? "正在捕获默认系统输出并发送给 ASR。原始音频不会保存。" : "正在捕获系统音频；未确认候选人材料，将使用通用回答上下文。");
@@ -861,6 +866,7 @@ function App() {
     pendingRef.current = false;
     beginInterview();
     setSessionActive(true);
+    setSessionPaused(false);
     setSessionMode("answer");
     setAsrStatus("idle");
     setPartial("");
@@ -893,16 +899,39 @@ function App() {
     const wasAsrSession = sessionMode === "asr" || sessionMode === "all";
     asrRef.current?.close(); asrRef.current = undefined;
     if (desktopRuntime && wasAsrSession) await invoke("stop_system_audio_capture").catch(() => undefined);
-    setSessionActive(false); setSessionMode("idle"); setAsrStatus("idle"); setPartial(""); pendingRef.current = false;
+    setSessionActive(false); setSessionPaused(false); setSessionMode("idle"); setAsrStatus("idle"); setPartial(""); pendingRef.current = false;
     setActiveSessionTitle("");
     setActiveSessionSourceTitle("");
     setActiveSessionCarriedTurnCount(0);
     setSessionFrameworkOverride("");
     setNotice("会话已结束，仅保留文本记录。");
   }
+  async function toggleSessionPause() {
+    if (!sessionActive) return;
+    const nextPaused = !sessionPaused;
+    const wasAsrSession = sessionMode === "asr" || sessionMode === "all";
+    try {
+      if (desktopRuntime && wasAsrSession) await invoke(nextPaused ? "pause_system_audio_capture" : "resume_system_audio_capture");
+      setSessionPaused(nextPaused);
+      if (nextPaused) {
+        pendingRef.current = false;
+        setAsrStatus(sessionMode === "answer" ? "idle" : "listening");
+        setNotice("本场面试已暂停；恢复后继续沿用当前会话上下文。");
+      } else {
+        setAsrStatus(sessionMode === "answer" ? "idle" : "listening");
+        setNotice("本场面试已继续，当前问题和上下文保持不变。");
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "切换暂停状态失败");
+    }
+  }
   async function submitQuestion() {
     if (!sessionActive) {
       setNotice("请先点击“启动测试”，再提交当前问题。");
+      return;
+    }
+    if (sessionPaused) {
+      setNotice("当前会话已暂停，请先点击“继续”。");
       return;
     }
     if (sessionMode === "answer") {
@@ -1147,6 +1176,7 @@ function App() {
     start: (mode) => startTest(mode),
     submit: () => { void submitQuestion(); },
     stop: () => { void stopSession(); },
+    pause: () => { void toggleSessionPause(); },
     stopGeneration: () => stopGeneration(),
     regenerate: () => { void regenerateAnswer(); },
   };
@@ -1165,6 +1195,8 @@ function App() {
           overlayActionsRef.current.submit();
         } else if (payload.command === "stop") {
           overlayActionsRef.current.stop();
+        } else if (payload.command === "pause") {
+          overlayActionsRef.current.pause();
         } else if (payload.command === "stop-generation") {
           overlayActionsRef.current.stopGeneration();
         } else if (payload.command === "regenerate") {
@@ -1202,7 +1234,7 @@ function App() {
       {tab === "session" && <section className="session-grid">
         <div className="panel session-panel">
           <div className="panel-head session-head"><div><div className="panel-kicker">LIVE SESSION</div><h2>系统音频会话</h2><p>默认输出设备 · PCM16 / Mono / 16kHz</p></div><span className={`session-badge ${sessionStage}`}><i />{statusLabel}</span></div>
-          <div className="session-actions"><div className="button-row">{sessionActive ? <button className="danger" onClick={() => void stopSession()}>结束会话</button> : <><button className="primary" onClick={() => startTest()}>启动测试</button><label className="test-mode"><span>测试内容</span><select value={testMode} onChange={(event) => setTestMode(event.target.value as TestMode)}><option value="all">全部启动</option><option value="asr">语音转文字</option><option value="answer">问题回答</option></select></label></>}{sessionActive && sessionMode !== "answer" && <button className="primary submit-button" onClick={() => void submitQuestion()}>提交当前问题</button>}</div><span className="action-hint">{!settings.shortcutEnabled ? "快捷键已关闭，可使用按钮提交当前问题" : testMode === "asr" && !asrReady ? "先在服务配置中填写 ASR 凭证" : testMode === "answer" && !llmReady ? "先在服务配置中填写文本模型" : testMode === "all" && (!llmReady || !asrReady) ? "全部启动需要同时配置 ASR 与文本模型" : sessionStage === "listening" ? `听到问题后按 ${settings.shortcut} 提交` : sessionStage === "finalizing" ? "正在等待最终转写文本" : sessionStage === "answering" ? "回答会同步显示在右侧" : testMode === "asr" ? "单独验证实时语音转文字" : testMode === "answer" ? "直接输入问题验证回答效果" : "同时验证转写与问题回答"}</span></div>
+          <div className="session-actions"><div className="button-row">{sessionActive ? <><button className="danger" onClick={() => void stopSession()}>结束会话</button><button onClick={() => void toggleSessionPause()} disabled={answerStatus === "generating"}>{sessionPaused ? "继续" : "暂停"}</button></> : <><button className="primary" onClick={() => startTest()}>启动测试</button><label className="test-mode"><span>测试内容</span><select value={testMode} onChange={(event) => setTestMode(event.target.value as TestMode)}><option value="all">全部启动</option><option value="asr">语音转文字</option><option value="answer">问题回答</option></select></label></>}{sessionActive && sessionMode !== "answer" && <button className="primary submit-button" disabled={sessionPaused} onClick={() => void submitQuestion()}>提交当前问题</button>}</div><span className="action-hint">{sessionPaused ? "当前会话已暂停，点击“继续”后恢复" : !settings.shortcutEnabled ? "快捷键已关闭，可使用按钮提交当前问题" : testMode === "asr" && !asrReady ? "先在服务配置中填写 ASR 凭证" : testMode === "answer" && !llmReady ? "先在服务配置中填写文本模型" : testMode === "all" && (!llmReady || !asrReady) ? "全部启动需要同时配置 ASR 与文本模型" : sessionStage === "listening" ? `听到问题后按 ${settings.shortcut} 提交` : sessionStage === "finalizing" ? "正在等待最终转写文本" : sessionStage === "answering" ? "回答会同步显示在右侧" : testMode === "asr" ? "单独验证实时语音转文字" : testMode === "answer" ? "直接输入问题验证回答效果" : "同时验证转写与问题回答"}</span></div>
           <div className="field-heading"><label>实时增量转写</label><span className={asrStatus === "listening" ? "live-dot" : ""}>{asrStatus === "listening" ? "正在接收" : "等待开始"}</span></div>
           <div className="transcript scroll-region" onWheel={(event) => { if (!settings.wheelScroll.transcript) event.preventDefault(); }}>{partial || "等待系统音频…"}</div>
           <div className="field-heading"><label>转写结果 / 当前问题</label><button className="text-button" disabled={!question && !partial} onClick={clearCurrentQuestion}>清空</button></div>

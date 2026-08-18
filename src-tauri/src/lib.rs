@@ -1,6 +1,6 @@
 mod audio;
 
-use audio::{start_system_audio_capture, stop_system_audio_capture, AudioCaptureState};
+use audio::{pause_system_audio_capture, resume_system_audio_capture, start_system_audio_capture, stop_system_audio_capture, AudioCaptureState};
 use blake2::{Blake2b512, Digest};
 use keyring::Entry;
 use rand::RngCore;
@@ -109,7 +109,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_stronghold::Builder::new(stronghold_password).build())
-        .invoke_handler(tauri::generate_handler![greet, exit_app, get_vault_password, start_system_audio_capture, stop_system_audio_capture])
+        .invoke_handler(tauri::generate_handler![greet, exit_app, get_vault_password, start_system_audio_capture, pause_system_audio_capture, resume_system_audio_capture, stop_system_audio_capture])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

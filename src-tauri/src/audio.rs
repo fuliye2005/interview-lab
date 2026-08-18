@@ -6,7 +6,12 @@ use std::thread;
 use tauri::{AppHandle, Emitter, State};
 use wasapi::{get_default_device, initialize_mta, Direction, SampleType, StreamMode, WaveFormat};
 
-pub struct AudioCaptureState(pub Arc<Mutex<Option<Arc<AtomicBool>>>>);
+pub struct AudioCaptureHandle {
+    pub running: Arc<AtomicBool>,
+    pub paused: Arc<AtomicBool>,
+}
+
+pub struct AudioCaptureState(pub Arc<Mutex<Option<AudioCaptureHandle>>>);
 
 impl Default for AudioCaptureState {
     fn default() -> Self {
@@ -21,16 +26,17 @@ pub fn start_system_audio_capture(app: AppHandle, state: State<'_, AudioCaptureS
         return Ok(());
     }
     let running = Arc::new(AtomicBool::new(true));
-    *active = Some(running.clone());
+    let paused = Arc::new(AtomicBool::new(false));
+    *active = Some(AudioCaptureHandle { running: running.clone(), paused: paused.clone() });
     let active_state = state.0.clone();
     thread::Builder::new()
         .name("system-audio-loopback".to_string())
         .spawn(move || {
-            if let Err(error) = capture_loop(app.clone(), running.clone()) {
+            if let Err(error) = capture_loop(app.clone(), running.clone(), paused.clone()) {
                 let _ = app.emit("audio-capture-error", error);
             }
             if let Ok(mut active) = active_state.lock() {
-                if active.as_ref().is_some_and(|current| Arc::ptr_eq(current, &running)) {
+                if active.as_ref().is_some_and(|current| Arc::ptr_eq(&current.running, &running)) {
                     *active = None;
                 }
             }
@@ -42,13 +48,31 @@ pub fn start_system_audio_capture(app: AppHandle, state: State<'_, AudioCaptureS
 #[tauri::command]
 pub fn stop_system_audio_capture(state: State<'_, AudioCaptureState>) -> Result<(), String> {
     let mut active = state.0.lock().map_err(|_| "音频采集状态锁定失败".to_string())?;
-    if let Some(running) = active.take() {
-        running.store(false, Ordering::SeqCst);
+    if let Some(handle) = active.take() {
+        handle.running.store(false, Ordering::SeqCst);
     }
     Ok(())
 }
 
-fn capture_loop(app: AppHandle, running: Arc<AtomicBool>) -> Result<(), String> {
+#[tauri::command]
+pub fn pause_system_audio_capture(state: State<'_, AudioCaptureState>) -> Result<(), String> {
+    let active = state.0.lock().map_err(|_| "音频采集状态锁定失败".to_string())?;
+    if let Some(handle) = active.as_ref() {
+        handle.paused.store(true, Ordering::SeqCst);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn resume_system_audio_capture(state: State<'_, AudioCaptureState>) -> Result<(), String> {
+    let active = state.0.lock().map_err(|_| "音频采集状态锁定失败".to_string())?;
+    if let Some(handle) = active.as_ref() {
+        handle.paused.store(false, Ordering::SeqCst);
+    }
+    Ok(())
+}
+
+fn capture_loop(app: AppHandle, running: Arc<AtomicBool>, paused: Arc<AtomicBool>) -> Result<(), String> {
     initialize_mta().ok().map_err(|error| format!("无法初始化 Windows 音频线程：{error}"))?;
     let device = get_default_device(&Direction::Render)
         .map_err(|error| format!("无法读取默认输出设备：{error}"))?;
@@ -90,7 +114,10 @@ fn capture_loop(app: AppHandle, running: Arc<AtomicBool>) -> Result<(), String> 
                 .read_from_device_to_deque(&mut queue)
                 .map_err(|error| format!("无法读取系统音频：{error}"))?;
         }
-        while queue.len() >= chunk_bytes {
+        if paused.load(Ordering::SeqCst) {
+            queue.clear();
+        }
+        while !paused.load(Ordering::SeqCst) && queue.len() >= chunk_bytes {
             let mut chunk = Vec::with_capacity(chunk_bytes);
             for _ in 0..chunk_bytes {
                 if let Some(byte) = queue.pop_front() {
