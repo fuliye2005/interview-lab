@@ -87,11 +87,23 @@ export interface SessionRecord {
   asrName: string;
   llmName: string;
   error?: string;
+  /** Whether this turn may be carried into a later interview session. */
+  contextIncluded?: boolean;
+  /** Pinned turns are retained before recent turns when the context window is full. */
+  pinned?: boolean;
 }
 
 export interface InterviewTurn {
   question: string;
   answer: string;
+  id?: string;
+  pinned?: boolean;
+}
+
+export interface InterviewContextTurn extends InterviewTurn {
+  id: string;
+  sessionId: string;
+  included: boolean;
 }
 
 export interface InterviewSession {
@@ -104,6 +116,9 @@ export interface InterviewSession {
   sourceSessionId?: string;
   carriedTurnCount: number;
   turns: SessionRecord[];
+  stageSummary?: string;
+  lastContextTurnCount?: number;
+  lastOmittedTurnCount?: number;
 }
 
 export interface WheelScrollSettings {

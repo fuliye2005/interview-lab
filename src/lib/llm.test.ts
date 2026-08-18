@@ -110,6 +110,17 @@ describe("buildInterviewPrompt", () => {
     expect(prompt).toContain("问题 12");
     expect(prompt).not.toContain("问题 1\n");
   });
+
+  it("keeps pinned turns ahead of newer turns when context is constrained", () => {
+    const turns = [
+      { id: "pinned", question: "候选人的固定事实", answer: "我负责过订单系统交付。", pinned: true },
+      ...Array.from({ length: 10 }, (_, index) => ({ question: `较新问题 ${index + 1}`, answer: "较长回答。".repeat(100) })),
+    ];
+    const selected = selectInterviewContext(turns, 1200);
+
+    expect(selected.turns.some((turn) => turn.id === "pinned")).toBe(true);
+    expect(selected.turns[selected.turns.length - 1]?.question).toBe("较新问题 10");
+  });
 });
 
 describe("streamLlm reasoning settings", () => {

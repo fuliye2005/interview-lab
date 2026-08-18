@@ -183,14 +183,28 @@ function normalizeHistory(value: unknown): InterviewSession[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => {
     if (isInterviewSession(item)) {
+      const turns = item.turns.map((turn) => ({
+        ...turn,
+        contextIncluded: typeof turn.contextIncluded === "boolean" ? turn.contextIncluded : !turn.error && Boolean(turn.answer?.trim()),
+        pinned: Boolean(turn.pinned),
+      }));
       return {
         ...item,
         title: typeof item.title === "string" && item.title.trim() ? item.title : `历史面试 ${new Date(item.createdAt).toLocaleString()}`,
         updatedAt: item.updatedAt || item.createdAt,
         carriedTurnCount: item.carriedTurnCount || 0,
+        stageSummary: typeof item.stageSummary === "string" ? item.stageSummary : "",
+        lastContextTurnCount: Number.isFinite(item.lastContextTurnCount) ? Math.max(0, Number(item.lastContextTurnCount)) : 0,
+        lastOmittedTurnCount: Number.isFinite(item.lastOmittedTurnCount) ? Math.max(0, Number(item.lastOmittedTurnCount)) : 0,
+        turns,
       };
     }
     const record = item as SessionRecord;
+    const normalizedRecord = {
+      ...record,
+      contextIncluded: typeof record.contextIncluded === "boolean" ? record.contextIncluded : !record.error && Boolean(record.answer?.trim()),
+      pinned: Boolean(record.pinned),
+    };
     return {
       id: record.id,
       title: `历史面试 ${new Date(record.createdAt).toLocaleString()}`,
@@ -199,7 +213,10 @@ function normalizeHistory(value: unknown): InterviewSession[] {
       asrName: record.asrName,
       llmName: record.llmName,
       carriedTurnCount: 0,
-      turns: [record],
+      stageSummary: "",
+      lastContextTurnCount: 0,
+      lastOmittedTurnCount: 0,
+      turns: [normalizedRecord],
     };
   }).filter((item) => Boolean(item.id && item.createdAt));
 }
