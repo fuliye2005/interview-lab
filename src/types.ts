@@ -2,6 +2,15 @@ export type LlmProtocol = "responses" | "chat-completions";
 export type AnswerDetail = "concise" | "balanced" | "detailed";
 export type ReasoningEffort = "none" | "low" | "medium" | "high";
 export type AsrPreset = "aliyun-trial" | "aliyun-nls" | "volcengine-asr" | "generic";
+export type InterviewFocus = "technical-business" | "technical-project" | "customer-solution" | "operations-delivery" | "team-collaboration";
+
+export const INTERVIEW_FOCUS_LABELS: Record<InterviewFocus, string> = {
+  "technical-business": "技术业务 / 项目岗位",
+  "technical-project": "技术项目与方案岗位",
+  "customer-solution": "售前 / 解决方案岗位",
+  "operations-delivery": "实施 / 运维 / 技术支持岗位",
+  "team-collaboration": "技术协作 / 管理岗位",
+};
 
 export interface LlmProfile {
   id: string;
@@ -84,6 +93,7 @@ export interface AppSettings {
   llmProfiles: LlmProfile[];
   activeLlmProfileId: string;
   shortcut: string;
+  interviewFocus: InterviewFocus;
 }
 
 const commonAsrConfig = (): Omit<AsrProviderConfig, "name" | "preset" | "protocol" | "wsUrl" | "apiKey" | "audioMode"> => ({

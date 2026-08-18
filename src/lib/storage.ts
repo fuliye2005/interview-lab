@@ -1,4 +1,4 @@
-import type { AppSettings, InterviewSession, LlmProfile, MaterialContext, SessionRecord } from "../types";
+import type { AppSettings, InterviewFocus, InterviewSession, LlmProfile, MaterialContext, SessionRecord } from "../types";
 import { createAsrPreset, createDefaultAsrConfig, createDefaultLlmProfile } from "../types";
 
 const SETTINGS_KEY = "interview-lab.settings.v1";
@@ -11,6 +11,7 @@ export const defaultSettings = (): AppSettings => ({
   llmProfiles: [createDefaultLlmProfile()],
   activeLlmProfileId: "",
   shortcut: "Ctrl+Shift+Space",
+  interviewFocus: "technical-business",
 });
 
 export const emptyMaterials = (): MaterialContext => ({
@@ -71,11 +72,16 @@ export function loadSettings(): AppSettings {
     asr: activeAsr,
     asrProfiles: { ...fallback.asrProfiles, ...asrProfiles, [activePreset]: activeAsr },
     llmProfiles,
+    interviewFocus: isInterviewFocus(stored.interviewFocus) ? stored.interviewFocus : fallback.interviewFocus,
   };
   if (!settings.llmProfiles.some((profile) => profile.id === settings.activeLlmProfileId)) {
     settings.activeLlmProfileId = settings.llmProfiles[0]?.id || "";
   }
   return settings;
+}
+
+function isInterviewFocus(value: unknown): value is InterviewFocus {
+  return value === "technical-business" || value === "technical-project" || value === "customer-solution" || value === "operations-delivery" || value === "team-collaboration";
 }
 
 export const saveSettings = (settings: AppSettings) => write(SETTINGS_KEY, settings);

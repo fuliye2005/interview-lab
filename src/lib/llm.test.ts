@@ -87,6 +87,13 @@ describe("buildInterviewPrompt", () => {
     expect(concise).not.toBe(balanced);
     expect(balanced).not.toBe(detailed);
   });
+
+  it("adapts answers for non-development technical roles", () => {
+    const prompt = buildInterviewPrompt("你如何处理客户现场的故障？", materials, [], "balanced", "operations-delivery");
+
+    expect(prompt).toContain("实施、运维或技术支持岗位");
+    expect(prompt).toContain("不要将回答写成算法或代码题解法");
+  });
 });
 
 describe("streamLlm reasoning settings", () => {
