@@ -253,10 +253,10 @@ function App() {
       onDebug: log,
     });
     try {
-      beginInterview();
       await asr.connect();
       asrRef.current = asr;
       await invoke("start_system_audio_capture");
+      beginInterview();
       setSessionActive(true);
       setSessionMode(mode);
       setAsrStatus("listening");
@@ -299,10 +299,15 @@ function App() {
     asrRef.current?.close(); asrRef.current = undefined;
     if (desktopRuntime && wasAsrSession) await invoke("stop_system_audio_capture").catch(() => undefined);
     setSessionActive(false); setSessionMode("idle"); setAsrStatus("idle"); setPartial(""); pendingRef.current = false;
+    setActiveSessionTitle("");
     setNotice("会话已结束，仅保留文本记录。");
   }
   async function submitQuestion() {
-    if (!sessionActive || sessionMode === "answer") {
+    if (!sessionActive) {
+      setNotice("请先点击“启动测试”，再提交当前问题。");
+      return;
+    }
+    if (sessionMode === "answer") {
       if (!questionRef.current.trim()) { setNotice("请先输入要测试的问题。"); return; }
       await generateAnswer(questionRef.current);
       return;
@@ -406,7 +411,7 @@ function App() {
         <div className="panel answer-panel">
           <div className="panel-head"><div><div className="panel-kicker">AI RESPONSE</div><h2>中文回答</h2><p>{INTERVIEW_FOCUS_LABELS[settings.interviewFocus]} · {activeProfile?.answerDetail === "detailed" ? "详细" : activeProfile?.answerDetail === "concise" ? "简洁" : "标准"}</p></div><span className={`answer-status ${answerStatus}`}>{answerStatus === "generating" ? "流式生成中" : answerStatus === "complete" ? "已完成" : answerStatus === "error" ? "生成失败" : "等待问题"}</span></div>
           <AnswerView answer={answer} />
-          <div className="answer-toolbar"><button onClick={() => void copyAnswer()} disabled={!answer}>复制回答</button><button onClick={() => void showOverlay(answer)} disabled={!answer}>打开悬浮窗</button><button className="primary" disabled={!question || answerStatus === "generating" || !llmReady} onClick={() => void generateAnswer(question)}>用当前文本生成</button></div>
+          <div className="answer-toolbar"><button onClick={() => void copyAnswer()} disabled={!answer}>复制回答</button><button onClick={() => void showOverlay(answer)} disabled={!answer}>打开悬浮窗</button><button className="primary" disabled={!sessionActive || !question || answerStatus === "generating" || !llmReady} onClick={() => void generateAnswer(question)}>用当前文本生成</button></div>
         </div>
         {settings.asr.debug && <div className="panel debug-panel"><h2>ASR 调试消息</h2><pre>{debug.join("\n\n") || "等待 WebSocket 消息…"}</pre></div>}
       </section>}

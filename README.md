@@ -15,12 +15,13 @@ Windows 实时语音面试辅助测试工具。它捕获默认系统输出音频
 
 - Windows 10/11。
 - Node.js 22+。
-- Rust/Cargo。本项目开发机已使用 `E:\dev-tools\rust`；新的 PowerShell 会话需要设置：
+- Rust/Cargo。建议使用 rustup 安装并确保 `cargo`、`rustc` 已在 `PATH` 中；如果本机使用自定义工具链，再按实际安装路径设置环境变量：
 
 ```powershell
-$env:RUSTUP_HOME = 'E:\dev-tools\rust\rustup'
-$env:CARGO_HOME = 'E:\dev-tools\rust\cargo'
-$env:PATH = 'E:\dev-tools\rust\cargo\bin;' + $env:PATH
+# 示例：自定义工具链目录（按本机实际路径修改）
+$env:RUSTUP_HOME = 'C:\path\to\rustup'
+$env:CARGO_HOME = 'C:\path\to\cargo'
+$env:PATH = 'C:\path\to\cargo\bin;' + $env:PATH
 ```
 
 ## 启动
