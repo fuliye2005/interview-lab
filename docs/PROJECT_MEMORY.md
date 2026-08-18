@@ -30,7 +30,7 @@
 
 ## 当前工作树
 
-当前分支为 `main`，本地与 `origin/main` 均为 `4bc0de4`；最新 release EXE 已复制到 `D:\Interview Lab\tauri-app.exe`，桌面快捷方式 `Interview Lab.lnk` 指向该文件；NSIS 安装包和 MSI 安装包已复制到桌面，文件名分别为 `Interview Lab 0.2.1 安装包.exe` 与 `Interview Lab 0.2.1 安装包.msi`。4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
+当前分支为 `main`，本地与 `origin/main` 均为 `cec7e91`；本次应用 release 构建对应产品代码提交 `4bc0de4`（后续仅追加记忆区文档提交）。最新 release EXE 已复制到 `D:\Interview Lab\tauri-app.exe`，桌面快捷方式 `Interview Lab.lnk` 指向该文件；NSIS 安装包和 MSI 安装包已复制到桌面，文件名分别为 `Interview Lab 0.2.1 安装包.exe` 与 `Interview Lab 0.2.1 安装包.msi`。4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
 
 - 安全备份 JSON 导出/导入，导出内容明确排除 API Key，导入保留本机已有凭证。
 - 存储诊断：SQLite/localStorage、数据版本、Stronghold、备份数量和 SQLite quick check。
