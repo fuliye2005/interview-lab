@@ -9,7 +9,7 @@ import { buildInterviewPrompt, sanitizeAnswerText, streamLlm, testLlmConnection 
 import { extractMaterialText, makeCandidateDraft, makeJobDraft } from "./lib/materials";
 import { importRepository as importRepositoryMaterial } from "./lib/repository";
 import { formatShortcut, shortcutKeyToken, toGlobalShortcut } from "./lib/shortcut";
-import { clearHistory, loadHistory, loadMaterials, loadSettings, saveHistory, saveMaterials, saveSettings } from "./lib/storage";
+import { clearHistory, defaultSettings, emptyMaterials, initializeStorage, loadHistory, loadMaterials, loadSettings, saveHistory, saveMaterials, saveSettings } from "./lib/storage";
 import type { AnswerStatus, AppSettings, AsrPreset, AsrStatus, InterviewFocus, InterviewSession, InterviewTurn, LlmProfile, MaterialContext, SessionRecord } from "./types";
 import { createAsrPreset, createDefaultLlmProfile, INTERVIEW_FOCUS_LABELS } from "./types";
 import "./App.css";
@@ -85,7 +85,7 @@ context_window = ${profile.contextWindow || 8000}
 answer_detail = "${profile.answerDetail}"
 reasoning_effort = "${profile.reasoningEffort}"
 interview_focus = "${focus}"
-api_key = "${profile.apiKey || "未填写"}"`;
+api_key = "${profile.apiKey ? "********" : "未填写"}"`;
 }
 
 function SessionProgress({ stage, mode }: { stage: SessionStage; mode: SessionMode }) {
@@ -194,10 +194,14 @@ function Overlay() {
 }
 
 function App() {
+  const desktopRuntime = isTauri();
+  const isOverlayWindow = new URLSearchParams(window.location.search).get("overlay") === "1";
   const [tab, setTab] = useState<Tab>("session");
-  const [settings, setSettings] = useState<AppSettings>(loadSettings);
-  const [materials, setMaterials] = useState<MaterialContext>(loadMaterials);
-  const [history, setHistory] = useState<InterviewSession[]>(loadHistory);
+  const [settings, setSettings] = useState<AppSettings>(() => desktopRuntime && !isOverlayWindow ? defaultSettings() : loadSettings());
+  const [materials, setMaterials] = useState<MaterialContext>(() => desktopRuntime && !isOverlayWindow ? emptyMaterials() : loadMaterials());
+  const [history, setHistory] = useState<InterviewSession[]>(() => desktopRuntime && !isOverlayWindow ? [] : loadHistory());
+  const [storageReady, setStorageReady] = useState(!desktopRuntime || isOverlayWindow);
+  const [storageError, setStorageError] = useState("");
   const [sessionActive, setSessionActive] = useState(false);
   const [sessionMode, setSessionMode] = useState<SessionMode>("idle");
   const [testMode, setTestMode] = useState<TestMode>("all");
@@ -225,8 +229,6 @@ function App() {
   const loadedContextRef = useRef<InterviewTurn[]>([]);
   const loadedSourceSessionIdRef = useRef<string | undefined>(undefined);
   const activeProfile = useMemo(() => settings.llmProfiles.find((item) => item.id === settings.activeLlmProfileId) ?? settings.llmProfiles[0], [settings]);
-  const desktopRuntime = isTauri();
-  const isOverlayWindow = new URLSearchParams(window.location.search).get("overlay") === "1";
   const llmReady = Boolean(activeProfile?.baseUrl.trim() && activeProfile?.apiKey.trim() && activeProfile?.model.trim());
   const asrReady = Boolean(settings.asr.wsUrl.trim() && settings.asr.apiKey.trim() && (settings.asr.protocol !== "aliyun-nls" || settings.asr.appKey?.trim()));
   const hasMaterials = Boolean(materials.resume.trim() || materials.jobDescription.trim() || materials.personalNotes.trim() || materials.candidateSummary.trim() || materials.jobSummary.trim() || materials.repository?.summary.trim());
@@ -234,9 +236,38 @@ function App() {
   const statusLabel = sessionStage === "manual" ? "等待输入" : sessionStage === "answering" ? "正在生成回答" : sessionStage === "complete" ? sessionMode === "asr" ? "转写已完成" : "回答已完成" : sessionStage === "listening" ? "正在聆听" : sessionStage === "finalizing" ? "正在提交问题" : sessionStage === "idle" && !llmReady && testMode !== "asr" ? "待配置模型" : sessionStage === "idle" ? "未开始" : "连接异常";
   testModeRef.current = testMode;
 
-  useEffect(() => saveSettings(settings), [settings]);
-  useEffect(() => saveMaterials(materials), [materials]);
-  useEffect(() => saveHistory(history), [history]);
+  useEffect(() => {
+    if (!desktopRuntime || isOverlayWindow) return;
+    let cancelled = false;
+    setStorageReady(false);
+    void initializeStorage().then((snapshot) => {
+      if (cancelled) return;
+      setSettings(snapshot.settings);
+      setMaterials(snapshot.materials);
+      setHistory(snapshot.history);
+      setStorageError("");
+      setStorageReady(true);
+    }).catch((error) => {
+      if (cancelled) return;
+      const message = error instanceof Error
+        ? error.message
+        : typeof error === "string"
+          ? error
+          : (() => {
+              try {
+                return JSON.stringify(error);
+              } catch {
+                return "本机数据加载失败";
+              }
+            })();
+      setStorageError(message);
+      setNotice(`本机数据加载失败：${message}。已暂停保存，避免覆盖现有配置。`);
+    });
+    return () => { cancelled = true; };
+  }, [desktopRuntime, isOverlayWindow]);
+  useEffect(() => { if (storageReady && !isOverlayWindow) void saveSettings(settings); }, [settings, storageReady, isOverlayWindow]);
+  useEffect(() => { if (storageReady && !isOverlayWindow) void saveMaterials(materials); }, [materials, storageReady, isOverlayWindow]);
+  useEffect(() => { if (storageReady && !isOverlayWindow) void saveHistory(history); }, [history, storageReady, isOverlayWindow]);
   useEffect(() => { if (!repositoryUrl && materials.repository?.url) setRepositoryUrl(materials.repository.url); }, [materials.repository?.url, repositoryUrl]);
   useEffect(() => { questionRef.current = question; }, [question]);
   useEffect(() => {
@@ -622,7 +653,7 @@ function App() {
       <p className="sidebar-footer">受控测试模式<br />不保存原始音频</p></aside>
     <section className={tab === "session" ? "content session-content" : "content"}><header className="topbar"><div><p className="eyebrow">WINDOWS · REALTIME ASR · LLM</p><h1>{({ session: "会话控制", materials: "候选人材料", settings: "服务配置", history: "文本记录" })[tab]}</h1></div><span className={`status ${statusClass}`}>{statusLabel}</span></header>
       <p className="notice">{notice}</p>
-      <div className="quick-status" aria-label="当前配置状态"><span className={llmReady ? "ready" : "pending"}><i />文本模型：{llmReady ? "已就绪" : "待配置"}</span><span className={asrReady ? "ready" : "muted"}><i />ASR：{asrReady ? "已配置" : "未配置"}</span>{tab === "materials" && <span className={materialClass}><i />材料：{materialLabel}</span>}<span className="autosave-state"><i />设置自动保存在本机</span></div>
+      <div className="quick-status" aria-label="当前配置状态"><span className={llmReady ? "ready" : "pending"}><i />文本模型：{llmReady ? "已就绪" : "待配置"}</span><span className={asrReady ? "ready" : "muted"}><i />ASR：{asrReady ? "已配置" : "未配置"}</span>{tab === "materials" && <span className={materialClass}><i />材料：{materialLabel}</span>}{storageError && <span className="pending"><i />本机存储：异常</span>}<span className="autosave-state"><i />设置自动保存在本机</span></div>
       {tab === "session" && <section className="session-grid">
         <div className="panel session-panel">
           <div className="panel-head session-head"><div><div className="panel-kicker">LIVE SESSION</div><h2>系统音频会话</h2><p>默认输出设备 · PCM16 / Mono / 16kHz</p></div><span className={`session-badge ${sessionStage}`}><i />{statusLabel}</span></div>

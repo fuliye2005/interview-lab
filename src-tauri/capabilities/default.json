@@ -7,6 +7,11 @@
     "core:default",
     "opener:default",
     "global-shortcut:allow-register",
-    "global-shortcut:allow-unregister-all"
+    "global-shortcut:allow-unregister-all",
+    "sql:allow-load",
+    "sql:allow-close",
+    "sql:allow-select",
+    "sql:allow-execute",
+    "stronghold:default"
   ]
 }

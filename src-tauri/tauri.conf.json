@@ -23,6 +23,11 @@
       "csp": null
     }
   },
+  "plugins": {
+    "sql": {
+      "preload": ["sqlite:interview-lab.db"]
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
