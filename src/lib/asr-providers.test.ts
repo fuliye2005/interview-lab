@@ -26,7 +26,10 @@ describe("ASR provider presets", () => {
 
 describe("ASR error classification", () => {
   it("distinguishes authentication and timeout errors", () => {
-    expect(classifyAsrError(new Error("401 token expired")).kind).toBe("authentication");
+    const expired = classifyAsrError(new Error("401 token expired"));
+    expect(expired.kind).toBe("authentication");
+    expect(expired.label).toBe("Token 可能已过期");
+    expect(expired.hint).toContain("重新获取临时 Token");
     expect(classifyAsrError(new Error("ASR WebSocket 连接超时")).kind).toBe("timeout");
   });
 });

@@ -47,6 +47,7 @@ export interface ClassifiedAsrError {
   kind: AsrErrorKind;
   label: string;
   message: string;
+  hint?: string;
 }
 
 export interface AsrTestResult {
@@ -89,8 +90,16 @@ export function classifyAsrError(error: unknown): ClassifiedAsrError {
   if (message.includes("请先配置") || message.includes("必须") || message.includes("缺少") || message.includes("填写")) {
     return { kind: "configuration", label: "配置不完整", message };
   }
+  if (/token.?expired|expired.?token|token.*过期|token.*失效|过期|失效/.test(lower)) {
+    return {
+      kind: "authentication",
+      label: "Token 可能已过期",
+      message,
+      hint: "重新获取临时 Token，并检查本机时间、AppKey 或 Access Token 是否匹配。",
+    };
+  }
   if (/401|403|token|apikey|appkey|access.?token|鉴权|认证|授权/.test(lower)) {
-    return { kind: "authentication", label: "鉴权失败", message };
+    return { kind: "authentication", label: "鉴权失败", message, hint: "检查 Token、AppKey / App ID 和服务端权限。" };
   }
   if (/超时|timeout/.test(lower)) {
     return { kind: "timeout", label: "连接超时", message };
@@ -107,14 +116,14 @@ export function classifyAsrError(error: unknown): ClassifiedAsrError {
   return { kind: "unknown", label: "未知错误", message };
 }
 
-export function asrConfigPreview(config: AsrProviderConfig) {
+export function asrConfigPreview(config: AsrProviderConfig, revealKey = false) {
   return `provider = "${asrProviderLabel(config)}"
 protocol = "${config.protocol || "generic"}"
 ws_url = "${config.wsUrl || "未填写"}"
 audio_mode = "${config.audioMode}"
 timeout_ms = ${config.timeoutMs}
-api_key = "${config.apiKey ? "********" : "未填写"}"
-app_key = "${config.appKey ? "********" : "未填写"}"
+api_key = "${config.apiKey ? revealKey ? config.apiKey : "********" : "未填写"}"
+app_key = "${config.appKey ? revealKey ? config.appKey : "********" : "未填写"}"
 app_id = "${config.appId || "未填写"}"
 cluster = "${config.cluster || "未填写"}"`;
 }
