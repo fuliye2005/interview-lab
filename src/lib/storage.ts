@@ -419,16 +419,20 @@ async function upsertDocument(context: PersistentContext, key: string, payload: 
   );
 }
 
+async function replaceHistoryRows(context: PersistentContext, history: InterviewSession[]) {
+  await context.db.execute("DELETE FROM interview_sessions");
+  for (const session of history.slice(0, 50)) {
+    await context.db.execute(
+      "INSERT INTO interview_sessions (id, created_at, updated_at, title, source_session_id, carried_turn_count, asr_name, llm_name, payload) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+      [session.id, session.createdAt, session.updatedAt, session.title, session.sourceSessionId ?? null, session.carriedTurnCount || 0, session.asrName, session.llmName, JSON.stringify(session)],
+    );
+  }
+}
+
 async function replaceHistory(context: PersistentContext, history: InterviewSession[]) {
   await context.db.execute("BEGIN");
   try {
-    await context.db.execute("DELETE FROM interview_sessions");
-    for (const session of history.slice(0, 50)) {
-      await context.db.execute(
-        "INSERT INTO interview_sessions (id, created_at, updated_at, title, source_session_id, carried_turn_count, asr_name, llm_name, payload) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-        [session.id, session.createdAt, session.updatedAt, session.title, session.sourceSessionId ?? null, session.carriedTurnCount || 0, session.asrName, session.llmName, JSON.stringify(session)],
-      );
-    }
+    await replaceHistoryRows(context, history);
     await context.db.execute("COMMIT");
   } catch (error) {
     await context.db.execute("ROLLBACK").catch(() => undefined);
@@ -451,8 +455,8 @@ async function readLatestBackup(context: PersistentContext): Promise<PersistentS
   }
 }
 
-async function maybeCreateBackup(context: PersistentContext, reason: string) {
-  if (Date.now() - context.lastBackupAt < BACKUP_INTERVAL_MS) return;
+async function maybeCreateBackup(context: PersistentContext, reason: string, force = false) {
+  if (!force && Date.now() - context.lastBackupAt < BACKUP_INTERVAL_MS) return;
   await context.db.execute(
     "INSERT INTO storage_backups (created_at, reason, settings_payload, materials_payload, history_payload) VALUES ($1, $2, $3, $4, $5)",
     [new Date().toISOString(), reason, JSON.stringify(redactSettings(context.snapshot.settings)), JSON.stringify(context.snapshot.materials), JSON.stringify(context.snapshot.history)],
@@ -478,6 +482,22 @@ async function persistHistoryNow(context: PersistentContext, history: InterviewS
   await maybeCreateBackup(context, reason);
   await replaceHistory(context, history);
   context.snapshot.history = history.slice(0, 50);
+}
+
+async function persistSnapshotNow(context: PersistentContext, snapshot: PersistentSnapshot, reason: string, forceBackup = false) {
+  await maybeCreateBackup(context, reason, forceBackup);
+  await context.db.execute("BEGIN");
+  try {
+    await upsertDocument(context, "settings", redactSettings(snapshot.settings));
+    await upsertDocument(context, "materials", snapshot.materials);
+    await replaceHistoryRows(context, snapshot.history);
+    await context.db.execute("COMMIT");
+  } catch (error) {
+    await context.db.execute("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
+  await writeSecrets(context, snapshot.settings);
+  context.snapshot = { settings: snapshot.settings, materials: snapshot.materials, history: snapshot.history.slice(0, 50) };
 }
 
 function enqueue(context: PersistentContext, operation: () => Promise<void>) {
@@ -658,16 +678,20 @@ export async function restoreLatestBackup(): Promise<PersistentSnapshot | undefi
     const backup = await readLatestBackup(context);
     if (!backup) return;
     const settings = await hydrateSecrets(context, backup.settings);
-    const materials = backup.materials;
-    const history = backup.history;
-    await writeSecrets(context, settings);
-    await upsertDocument(context, "settings", redactSettings(settings));
-    await upsertDocument(context, "materials", materials);
-    await replaceHistory(context, history);
-    restored = { settings, materials, history };
-    context.snapshot = restored;
+    restored = { settings, materials: backup.materials, history: backup.history };
+    await persistSnapshotNow(context, restored, "restore latest backup", true);
   });
   return restored;
+}
+
+export function saveSnapshot(snapshot: PersistentSnapshot): Promise<void> {
+  if (!isTauri()) {
+    write(SETTINGS_KEY, redactSettings(snapshot.settings));
+    write(MATERIALS_KEY, snapshot.materials);
+    write(HISTORY_KEY, snapshot.history.slice(0, 50));
+    return Promise.resolve();
+  }
+  return getTauriContext().then((context) => context ? enqueue(context, () => persistSnapshotNow(context, snapshot, "snapshot import", true)) : undefined);
 }
 
 export function saveSettings(settings: AppSettings): Promise<void> {

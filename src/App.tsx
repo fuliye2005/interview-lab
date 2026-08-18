@@ -14,7 +14,7 @@ import { applyLlmProviderPreset, LLM_PROVIDER_PRESETS, providerLabel, providerRe
 import { importRepository as importRepositoryMaterial } from "./lib/repository";
 import { detectRuntimeEnvironment } from "./lib/runtime";
 import { formatShortcut, shortcutKeyToken, toGlobalShortcut } from "./lib/shortcut";
-import { clearHistory, createSafeDataBundle, defaultSettings, emptyMaterials, getStorageDiagnostics, initializeStorage, loadHistory, loadMaterials, loadSettings, markCleanShutdown, parseSafeDataBundle, restoreLatestBackup, saveHistory, saveMaterials, saveSettings } from "./lib/storage";
+import { clearHistory, createSafeDataBundle, defaultSettings, emptyMaterials, getStorageDiagnostics, initializeStorage, loadHistory, loadMaterials, loadSettings, markCleanShutdown, parseSafeDataBundle, restoreLatestBackup, saveHistory, saveMaterials, saveSettings, saveSnapshot } from "./lib/storage";
 import type { StorageDiagnostics } from "./lib/storage";
 import type { AnswerFramework, AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, InterviewContextTurn, InterviewFocus, InterviewSession, InterviewTurn, LlmProfile, LlmProviderPresetId, MaterialContext, OverlayLayout, OverlaySettings, SessionRecord, WheelScrollSettings } from "./types";
 import { ANSWER_FRAMEWORK_LABELS, createAsrPreset, createDefaultLlmProfile, INTERVIEW_FOCUS_LABELS } from "./types";
@@ -1147,10 +1147,10 @@ function App() {
           asrProfiles: Object.fromEntries(Object.entries(bundle.settings.asrProfiles).map(([preset, profile]) => [preset, profile ? { ...profile, apiKey: settings.asrProfiles[preset as AsrPreset]?.apiKey || "" } : profile])) as AppSettings["asrProfiles"],
           llmProfiles: bundle.settings.llmProfiles.map((profile) => ({ ...profile, apiKey: currentProfiles.get(profile.id)?.apiKey || currentProfilesByName.get(profile.name)?.apiKey || "" })),
         };
+        await saveSnapshot({ settings: importedSettings, materials: bundle.materials, history: bundle.history });
         setSettings(importedSettings);
         setMaterials(bundle.materials);
         setHistory(bundle.history);
-        await Promise.all([saveSettings(importedSettings), saveMaterials(bundle.materials), saveHistory(bundle.history)]);
         setStorageDiagnostics(await getStorageDiagnostics());
         setNotice(`已导入安全备份：${bundle.history.length} 场会话；原有 Key 未被覆盖。`);
       } catch (error) {

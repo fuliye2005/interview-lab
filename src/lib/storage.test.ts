@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSafeDataBundle, defaultSettings, loadHistory, loadSettings, parseSafeDataBundle, saveSettings } from "./storage";
+import { createSafeDataBundle, defaultSettings, loadHistory, loadSettings, parseSafeDataBundle, saveSettings, saveSnapshot } from "./storage";
 
 const historyKey = "interview-lab.history.v1";
 const settingsKey = "interview-lab.settings.v1";
@@ -108,6 +108,20 @@ describe("loadSettings", () => {
     expect(persisted.llmProfiles[0].health).toMatchObject({ status: "error", testedAt: "2026-08-18T08:00:00.000Z" });
     expect(healthMessage).not.toContain(credential);
     expect(healthMessage).toContain("********");
+  });
+
+  it("writes an imported snapshot as a complete browser-preview unit", async () => {
+    const values = setStoredSettings(null);
+    const settings = defaultSettings();
+    settings.llmProfiles[0].apiKey = "snapshot-secret";
+    const materials = { resume: "简历", jobDescription: "JD", personalNotes: "", candidateSummary: "", jobSummary: "", confirmed: false };
+    const history = [{ id: "session-1", title: "一面", createdAt: "2026-08-18T08:00:00.000Z", updatedAt: "2026-08-18T08:01:00.000Z", asrName: "ASR", llmName: "LLM", carriedTurnCount: 0, turns: [] }];
+
+    await saveSnapshot({ settings, materials, history });
+
+    expect(JSON.parse(values.get(settingsKey) || "{}")).toMatchObject({ llmProfiles: [{ apiKey: "" }] });
+    expect(JSON.parse(values.get("interview-lab.materials.v1") || "{}")).toMatchObject({ resume: "简历" });
+    expect(JSON.parse(values.get(historyKey) || "[]")).toHaveLength(1);
   });
 
   it("exports a backup without credentials and accepts its normalized shape", () => {
