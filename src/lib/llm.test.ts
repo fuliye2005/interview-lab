@@ -99,6 +99,14 @@ describe("buildInterviewPrompt", () => {
     expect(prompt).toContain("不要将回答写成算法或代码题解法");
   });
 
+  it("applies a per-session answer framework without changing the model profile", () => {
+    const prompt = buildInterviewPrompt("请说说一次客户异议", materials, [], "balanced", "customer-solution", 8000, "这一轮重点是客户价值和风险边界。", "customer-objection");
+
+    expect(prompt).toContain("客户异议");
+    expect(prompt).toContain("先复述客户关切");
+    expect(prompt).toContain("这一轮重点是客户价值和风险边界。");
+  });
+
   it("keeps the newest turns when a long interview reaches the context window", () => {
     const turns = Array.from({ length: 12 }, (_, index) => ({ question: `问题 ${index + 1}`, answer: "很长的回答内容。".repeat(100) }));
     const selected = selectInterviewContext(turns, 1200);

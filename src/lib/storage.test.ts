@@ -68,6 +68,12 @@ describe("loadSettings", () => {
   it("keeps wheel scrolling disabled by default and merges partial legacy settings", () => {
     setStoredSettings({ wheelScroll: { answer: true }, shortcutEnabled: false });
 
-    expect(loadSettings()).toMatchObject({ wheelScroll: { transcript: false, answer: true }, shortcutEnabled: false });
+    expect(loadSettings()).toMatchObject({ wheelScroll: { transcript: false, answer: true }, shortcutEnabled: false, answerFramework: "balanced" });
+  });
+
+  it("falls back to a safe answer framework when legacy settings contain an unknown value", () => {
+    setStoredSettings({ answerFramework: "invented-framework" });
+
+    expect(loadSettings().answerFramework).toBe("balanced");
   });
 });

@@ -13,8 +13,8 @@ import { applyLlmProviderPreset, LLM_PROVIDER_PRESETS, providerLabel, providerRe
 import { importRepository as importRepositoryMaterial } from "./lib/repository";
 import { formatShortcut, shortcutKeyToken, toGlobalShortcut } from "./lib/shortcut";
 import { clearHistory, defaultSettings, emptyMaterials, initializeStorage, loadHistory, loadMaterials, loadSettings, saveHistory, saveMaterials, saveSettings } from "./lib/storage";
-import type { AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, InterviewContextTurn, InterviewFocus, InterviewSession, InterviewTurn, LlmProfile, LlmProviderPresetId, MaterialContext, OverlayLayout, OverlaySettings, SessionRecord, WheelScrollSettings } from "./types";
-import { createAsrPreset, createDefaultLlmProfile, INTERVIEW_FOCUS_LABELS } from "./types";
+import type { AnswerFramework, AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, InterviewContextTurn, InterviewFocus, InterviewSession, InterviewTurn, LlmProfile, LlmProviderPresetId, MaterialContext, OverlayLayout, OverlaySettings, SessionRecord, WheelScrollSettings } from "./types";
+import { ANSWER_FRAMEWORK_LABELS, createAsrPreset, createDefaultLlmProfile, INTERVIEW_FOCUS_LABELS } from "./types";
 import "./App.css";
 import "./theme.css";
 
@@ -292,6 +292,7 @@ function App() {
   const [activeSessionCarriedTurnCount, setActiveSessionCarriedTurnCount] = useState(0);
   const [contextStats, setContextStats] = useState({ total: 0, sent: 0, omitted: 0 });
   const [pendingContextTurns, setPendingContextTurns] = useState<InterviewContextTurn[]>([]);
+  const [sessionFrameworkOverride, setSessionFrameworkOverride] = useState<AnswerFramework | "">("");
   const [selectedHistorySessionId, setSelectedHistorySessionId] = useState<string | undefined>();
   const [profileTests, setProfileTests] = useState<Record<string, ProfileTestState>>({});
   const [profileModelStates, setProfileModelStates] = useState<Record<string, ProfileModelState>>({});
@@ -322,6 +323,7 @@ function App() {
   const hasMaterials = Boolean(materials.resume.trim() || materials.jobDescription.trim() || materials.personalNotes.trim() || materials.candidateSummary.trim() || materials.jobSummary.trim() || materials.repository?.summary.trim());
   const overlayMaterialsLabel = materials.confirmed ? "已确认并用于回答" : hasMaterials ? "有材料，等待确认" : "未添加材料";
   const sessionStage: SessionStage = answerStatus === "generating" ? "answering" : answerStatus === "complete" ? "complete" : !sessionActive ? "idle" : sessionMode === "answer" ? "manual" : asrStatus === "finalizing" ? "finalizing" : "listening";
+  const effectiveAnswerFramework = sessionFrameworkOverride || settings.answerFramework;
   const statusLabel = sessionStage === "manual" ? "等待输入" : sessionStage === "answering" ? "正在生成回答" : sessionStage === "complete" ? sessionMode === "asr" ? "转写已完成" : "回答已完成" : sessionStage === "listening" ? "正在聆听" : sessionStage === "finalizing" ? "正在提交问题" : sessionStage === "idle" && !llmReady && testMode !== "asr" ? "待配置模型" : sessionStage === "idle" ? "未开始" : "连接异常";
   testModeRef.current = testMode;
 
@@ -798,6 +800,7 @@ function App() {
     setActiveSessionTitle("");
     setActiveSessionSourceTitle("");
     setActiveSessionCarriedTurnCount(0);
+    setSessionFrameworkOverride("");
     setNotice("会话已结束，仅保留文本记录。");
   }
   async function submitQuestion() {
@@ -842,7 +845,7 @@ function App() {
     try {
       let full = "";
       const activeStageSummary = history.find((session) => session.id === activeSessionIdRef.current)?.stageSummary || "";
-      await streamLlm(activeProfile, buildInterviewPrompt(finalQuestion, materials, previousTurns, activeProfile.answerDetail, settings.interviewFocus, activeProfile.contextWindow, activeStageSummary), (delta) => {
+      await streamLlm(activeProfile, buildInterviewPrompt(finalQuestion, materials, previousTurns, activeProfile.answerDetail, settings.interviewFocus, activeProfile.contextWindow, activeStageSummary, effectiveAnswerFramework), (delta) => {
         full += delta;
         const cleanAnswer = sanitizeAnswerText(full);
         setAnswer(cleanAnswer);
@@ -985,6 +988,7 @@ function App() {
           {pendingContextTurns.length > 0 && !sessionActive && <div className="pending-context-strip"><span>下一轮将承接 {pendingContextTurns.filter((turn) => turn.included).length} / {pendingContextTurns.length} 轮</span><button className="text-button" onClick={() => { setSelectedHistorySessionId(loadedSourceSessionIdRef.current); setTab("history"); }}>查看并修改上下文</button></div>}
           <SessionProgress stage={sessionStage} mode={sessionMode === "idle" ? testMode : sessionMode} />
           {!sessionActive && <label className="session-title-draft"><span>本次会话主题</span><input value={settings.sessionTitleDraft} onChange={(event) => setSettings((state) => ({ ...state, sessionTitleDraft: event.target.value }))} placeholder="例如：售前解决方案岗位一面" /></label>}
+          <label className="session-framework"><span>本场回答框架</span><select value={sessionFrameworkOverride} onChange={(event) => setSessionFrameworkOverride(event.target.value as AnswerFramework | "")}><option value="">跟随默认：{ANSWER_FRAMEWORK_LABELS[settings.answerFramework]}</option>{Object.entries(ANSWER_FRAMEWORK_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <div className="session-actions"><div className="button-row">{sessionActive ? <button className="danger" onClick={() => void stopSession()}>结束会话</button> : <><button className="primary" onClick={() => startTest()}>启动测试</button><label className="test-mode"><span>测试内容</span><select value={testMode} onChange={(event) => setTestMode(event.target.value as TestMode)}><option value="all">全部启动</option><option value="asr">语音转文字</option><option value="answer">问题回答</option></select></label></>}{sessionActive && sessionMode !== "answer" && <button className="primary submit-button" onClick={() => void submitQuestion()}>提交当前问题</button>}</div><span className="action-hint">{!settings.shortcutEnabled ? "快捷键已关闭，可使用按钮提交当前问题" : testMode === "asr" && !asrReady ? "先在服务配置中填写 ASR 凭证" : testMode === "answer" && !llmReady ? "先在服务配置中填写文本模型" : testMode === "all" && (!llmReady || !asrReady) ? "全部启动需要同时配置 ASR 与文本模型" : sessionStage === "listening" ? `听到问题后按 ${settings.shortcut} 提交` : sessionStage === "finalizing" ? "正在等待最终转写文本" : sessionStage === "answering" ? "回答会同步显示在右侧" : testMode === "asr" ? "单独验证实时语音转文字" : testMode === "answer" ? "直接输入问题验证回答效果" : "同时验证转写与问题回答"}</span></div>
           <div className="shortcut"><span>全局快捷键</span><kbd>{settings.shortcut}</kbd><span>· 仅在语音转文字或全部启动时用于提交当前语音段</span></div>
           <div className="field-heading"><label>实时增量转写</label><span className={asrStatus === "listening" ? "live-dot" : ""}>{asrStatus === "listening" ? "正在接收" : "等待开始"}</span></div>
@@ -1003,7 +1007,7 @@ function App() {
       {tab === "materials" && <section className="panel repository-panel"><div className="panel-head"><div><div className="panel-kicker">OPEN SOURCE PROJECT</div><h2>GitHub / Gitee 仓库</h2><p>导入公开仓库的 README、目录和关键配置，用于回答项目与 Vibe Coding 经历问题。</p></div><span className={`context-state ${materials.repository?.confirmed ? "ready" : materials.repository ? "pending" : "muted"}`}><i />{materials.repository?.confirmed ? "已确认" : materials.repository ? "待确认" : "未导入"}</span></div><div className="repository-import-row"><input value={repositoryUrl} onChange={(event) => setRepositoryUrl(event.target.value)} placeholder="https://github.com/owner/repo 或 https://gitee.com/owner/repo" /><button className="primary" disabled={repositoryImporting} onClick={() => void importRepositoryContext()}>{repositoryImporting ? "导入中…" : "导入仓库"}</button></div>{materials.repository && <><div className="repository-meta"><strong>{materials.repository.name}</strong><span>{materials.repository.provider === "github" ? "GitHub" : "Gitee"} · {materials.repository.branch} · {materials.repository.fileTree.split("\n").filter(Boolean).length} 个文件</span></div><label>项目摘要（可编辑）</label><textarea rows={5} value={materials.repository.summary} onChange={(event) => setMaterials((state) => ({ ...state, repository: state.repository ? { ...state.repository, summary: event.target.value, confirmed: false } : state.repository }))} /><label>关键文件与目录（只读预览）</label><textarea className="repository-preview" readOnly rows={8} value={`${materials.repository.fileTree}\n\n${materials.repository.keyFiles}`} /><div className="context-actions repository-actions"><button className={materials.repository.confirmed ? "success" : "primary"} onClick={() => setMaterials((state) => ({ ...state, repository: state.repository ? { ...state.repository, confirmed: !state.repository.confirmed } : state.repository }))}>{materials.repository.confirmed ? "取消用于回答" : "确认并用于回答"}</button><button onClick={() => setMaterials((state) => ({ ...state, repository: undefined }))}>移除仓库</button></div></>}</section>}
       {tab === "settings" && <section className="settings-stack"><AsrProviderPanel settings={settings} asrProfileTests={asrProfileTests} expandedPresetIds={expandedAsrPresetIds} onToggleExpanded={toggleAsrPresetExpanded} onSelect={selectAsrPreset} onUpdate={updateAsrProfile} onTest={testAsrProfile} onSave={saveConfiguration} />
         <LlmProviderPanel settings={settings} setSettings={setSettings} profileTests={profileTests} profileModelStates={profileModelStates} profileQuery={profileQuery} profileSort={profileSort} expandedProfileIds={expandedProfileIds} setProfileQuery={setProfileQuery} setProfileSort={setProfileSort} onToggleExpanded={toggleProfileExpanded} onAddPreset={addProfileFromPreset} onApplyPreset={applyProfilePreset} onDuplicate={duplicateProfile} onRemove={removeProfile} onMove={moveProfile} onTest={testProfile} onLoadModels={loadProfileModels} onSave={saveConfiguration} />
-        <div className="panel"><div className="panel-head"><div><h2>回答策略</h2><p>决定模型在技术问题中优先强调的表达维度。</p></div></div><div className="form-grid"><Field label="面试方向" value={settings.interviewFocus} onChange={(value) => setSettings((state) => ({ ...state, interviewFocus: value as InterviewFocus }))} select={Object.entries(INTERVIEW_FOCUS_LABELS)} /></div></div>
+        <div className="panel"><div className="panel-head"><div><h2>回答策略</h2><p>默认策略会用于新会话；会话页可以临时覆盖，不会改动这里的配置。</p></div></div><div className="form-grid"><Field label="面试方向" value={settings.interviewFocus} onChange={(value) => setSettings((state) => ({ ...state, interviewFocus: value as InterviewFocus }))} select={Object.entries(INTERVIEW_FOCUS_LABELS)} /><Field label="默认回答框架" value={settings.answerFramework} onChange={(value) => setSettings((state) => ({ ...state, answerFramework: value as AnswerFramework }))} select={Object.entries(ANSWER_FRAMEWORK_LABELS)} /></div></div>
         <div className="panel"><div className="panel-head"><div><h2>全局快捷键</h2><p>关闭后不会注册或响应该快捷键。</p></div><label className="checkbox shortcut-toggle"><input type="checkbox" checked={settings.shortcutEnabled} onChange={(event) => setSettings((state) => ({ ...state, shortcutEnabled: event.target.checked }))} />启用快捷键</label></div><div className="shortcut-field"><span>快捷键</span><ShortcutRecorder value={settings.shortcut} onChange={(value) => setSettings((state) => ({ ...state, shortcut: value }))} /></div></div>
         <OverlaySettingsPanel settings={settings.overlay} onChange={(patch) => setSettings((state) => ({ ...state, overlay: { ...state.overlay, ...patch } }))} />
         <div className="panel"><div className="panel-head"><div><h2>界面行为</h2><p>分别控制转写区和回答区是否响应鼠标滚轮。</p></div></div><div className="settings-toggle-grid"><label className="checkbox"><input type="checkbox" checked={settings.wheelScroll.transcript} onChange={(event) => setSettings((state) => ({ ...state, wheelScroll: { ...state.wheelScroll, transcript: event.target.checked } }))} />转写区允许滚轮滚动</label><label className="checkbox"><input type="checkbox" checked={settings.wheelScroll.answer} onChange={(event) => setSettings((state) => ({ ...state, wheelScroll: { ...state.wheelScroll, answer: event.target.checked } }))} />回答区允许滚轮滚动</label></div></div></section>}

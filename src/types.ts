@@ -1,5 +1,6 @@
 export type LlmProtocol = "responses" | "chat-completions";
 export type AnswerDetail = "concise" | "balanced" | "detailed";
+export type AnswerFramework = "balanced" | "star" | "project-review" | "incident" | "customer-objection" | "tradeoff" | "collaboration";
 export type ReasoningEffort = "none" | "low" | "medium" | "high";
 export type LlmProviderPresetId = "custom" | "openai-compatible" | "openai-responses" | "openrouter" | "deepseek" | "kimi" | "qwen" | "doubao" | "ollama";
 export type AsrPreset = "aliyun-trial" | "aliyun-nls" | "volcengine-asr" | "generic";
@@ -11,6 +12,16 @@ export const INTERVIEW_FOCUS_LABELS: Record<InterviewFocus, string> = {
   "customer-solution": "售前 / 解决方案岗位",
   "operations-delivery": "实施 / 运维 / 技术支持岗位",
   "team-collaboration": "技术协作 / 管理岗位",
+};
+
+export const ANSWER_FRAMEWORK_LABELS: Record<AnswerFramework, string> = {
+  balanced: "自然综合回答",
+  star: "STAR 结构",
+  "project-review": "项目复盘",
+  incident: "故障处理",
+  "customer-objection": "客户异议",
+  tradeoff: "方案权衡",
+  collaboration: "跨部门协作",
 };
 
 export interface LlmProfile {
@@ -150,6 +161,7 @@ export interface AppSettings {
   shortcut: string;
   shortcutEnabled: boolean;
   interviewFocus: InterviewFocus;
+  answerFramework: AnswerFramework;
   sessionTitleDraft: string;
   wheelScroll: WheelScrollSettings;
   overlay: OverlaySettings;

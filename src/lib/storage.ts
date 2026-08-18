@@ -1,5 +1,5 @@
 import { isTauri, invoke } from "@tauri-apps/api/core";
-import type { AppSettings, AsrPreset, AsrProviderConfig, InterviewFocus, InterviewSession, LlmProfile, MaterialContext, SessionRecord } from "../types";
+import type { AnswerFramework, AppSettings, AsrPreset, AsrProviderConfig, InterviewFocus, InterviewSession, LlmProfile, MaterialContext, SessionRecord } from "../types";
 import { createAsrPreset, createDefaultAsrConfig, createDefaultLlmProfile } from "../types";
 
 const SETTINGS_KEY = "interview-lab.settings.v1";
@@ -49,6 +49,7 @@ export const defaultSettings = (): AppSettings => ({
   shortcut: "Ctrl+Shift+Space",
   shortcutEnabled: true,
   interviewFocus: "technical-business",
+  answerFramework: "balanced",
   sessionTitleDraft: "",
   wheelScroll: { transcript: false, answer: false },
   overlay: {
@@ -134,6 +135,7 @@ function normalizeSettings(stored?: Partial<AppSettings> | null): AppSettings {
     llmProfiles,
     shortcutEnabled: typeof source.shortcutEnabled === "boolean" ? source.shortcutEnabled : fallback.shortcutEnabled,
     interviewFocus: isInterviewFocus(source.interviewFocus) ? source.interviewFocus : fallback.interviewFocus,
+    answerFramework: isAnswerFramework(source.answerFramework) ? source.answerFramework : fallback.answerFramework,
     sessionTitleDraft: typeof source.sessionTitleDraft === "string" ? source.sessionTitleDraft : fallback.sessionTitleDraft,
     wheelScroll: { ...fallback.wheelScroll, ...storedWheelScroll },
     overlay: normalizeOverlaySettings(storedOverlay, fallback.overlay),
@@ -169,6 +171,10 @@ function normalizeOverlaySettings(value: unknown, fallback: AppSettings["overlay
 
 function isInterviewFocus(value: unknown): value is InterviewFocus {
   return value === "technical-business" || value === "technical-project" || value === "customer-solution" || value === "operations-delivery" || value === "team-collaboration";
+}
+
+function isAnswerFramework(value: unknown): value is AnswerFramework {
+  return value === "balanced" || value === "star" || value === "project-review" || value === "incident" || value === "customer-objection" || value === "tradeoff" || value === "collaboration";
 }
 
 function normalizeMaterials(value: unknown): MaterialContext {
