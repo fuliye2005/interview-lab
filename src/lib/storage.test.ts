@@ -69,7 +69,7 @@ describe("loadSettings", () => {
   it("keeps wheel scrolling disabled by default and merges partial legacy settings", () => {
     setStoredSettings({ wheelScroll: { answer: true }, shortcutEnabled: false });
 
-    expect(loadSettings()).toMatchObject({ wheelScroll: { transcript: false, answer: true }, shortcutEnabled: false, answerFramework: "balanced", overlayToggleShortcut: "Ctrl+Shift+O", stopGenerationShortcut: "Ctrl+Shift+X", clickThroughShortcut: "Ctrl+Shift+P" });
+    expect(loadSettings()).toMatchObject({ wheelScroll: { transcript: false, answer: true }, shortcutEnabled: false, closeToTray: true, answerFramework: "balanced", overlayToggleShortcut: "Ctrl+Shift+O", stopGenerationShortcut: "Ctrl+Shift+X", clickThroughShortcut: "Ctrl+Shift+P" });
   });
 
   it("falls back to a safe answer framework when legacy settings contain an unknown value", () => {

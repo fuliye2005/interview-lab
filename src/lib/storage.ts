@@ -80,6 +80,7 @@ export const defaultSettings = (): AppSettings => ({
   stopGenerationShortcut: "Ctrl+Shift+X",
   clickThroughShortcut: "Ctrl+Shift+P",
   shortcutEnabled: true,
+  closeToTray: true,
   interviewFocus: "technical-business",
   answerFramework: "balanced",
   sessionTitleDraft: "",
@@ -170,6 +171,7 @@ function normalizeSettings(stored?: Partial<AppSettings> | null): AppSettings {
     stopGenerationShortcut: typeof source.stopGenerationShortcut === "string" && source.stopGenerationShortcut.trim() ? source.stopGenerationShortcut : fallback.stopGenerationShortcut,
     clickThroughShortcut: typeof source.clickThroughShortcut === "string" && source.clickThroughShortcut.trim() ? source.clickThroughShortcut : fallback.clickThroughShortcut,
     shortcutEnabled: typeof source.shortcutEnabled === "boolean" ? source.shortcutEnabled : fallback.shortcutEnabled,
+    closeToTray: typeof source.closeToTray === "boolean" ? source.closeToTray : fallback.closeToTray,
     interviewFocus: isInterviewFocus(source.interviewFocus) ? source.interviewFocus : fallback.interviewFocus,
     answerFramework: isAnswerFramework(source.answerFramework) ? source.answerFramework : fallback.answerFramework,
     sessionTitleDraft: typeof source.sessionTitleDraft === "string" ? source.sessionTitleDraft : fallback.sessionTitleDraft,
@@ -566,6 +568,29 @@ export async function markCleanShutdown() {
   const context = await getTauriContext();
   if (!context) return;
   await enqueue(context, () => upsertDocument(context, "runtime", { state: "clean", startedAt: context.startup.lastStartedAt || new Date().toISOString(), cleanAt: new Date().toISOString() })).catch(() => undefined);
+}
+
+export async function restoreLatestBackup(): Promise<PersistentSnapshot | undefined> {
+  if (!isTauri()) return undefined;
+  const context = await getTauriContext();
+  if (!context) return undefined;
+  let restored: PersistentSnapshot | undefined;
+  await enqueue(context, async () => {
+    const rows = await context.db.select<Array<{ settings_payload: string; materials_payload: string; history_payload: string }>>("SELECT settings_payload, materials_payload, history_payload FROM storage_backups ORDER BY id DESC LIMIT 1");
+    const row = rows[0];
+    if (!row) return;
+    const backupSettings = normalizeSettings(JSON.parse(row.settings_payload) as Partial<AppSettings>);
+    const settings = await hydrateSecrets(context, backupSettings);
+    const materials = normalizeMaterials(JSON.parse(row.materials_payload));
+    const history = normalizeHistory(JSON.parse(row.history_payload));
+    await writeSecrets(context, settings);
+    await upsertDocument(context, "settings", redactSettings(settings));
+    await upsertDocument(context, "materials", materials);
+    await replaceHistory(context, history);
+    restored = { settings, materials, history };
+    context.snapshot = restored;
+  });
+  return restored;
 }
 
 export function saveSettings(settings: AppSettings): Promise<void> {

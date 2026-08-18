@@ -163,6 +163,7 @@ export interface AppSettings {
   stopGenerationShortcut: string;
   clickThroughShortcut: string;
   shortcutEnabled: boolean;
+  closeToTray: boolean;
   interviewFocus: InterviewFocus;
   answerFramework: AnswerFramework;
   sessionTitleDraft: string;

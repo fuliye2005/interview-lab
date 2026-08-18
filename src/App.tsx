@@ -13,7 +13,7 @@ import { extractMaterialText, makeCandidateDraft, makeJobDraft } from "./lib/mat
 import { applyLlmProviderPreset, LLM_PROVIDER_PRESETS, providerLabel, providerRequiresKey } from "./lib/providers";
 import { importRepository as importRepositoryMaterial } from "./lib/repository";
 import { formatShortcut, shortcutKeyToken, toGlobalShortcut } from "./lib/shortcut";
-import { clearHistory, createSafeDataBundle, defaultSettings, emptyMaterials, getStorageDiagnostics, initializeStorage, loadHistory, loadMaterials, loadSettings, markCleanShutdown, parseSafeDataBundle, saveHistory, saveMaterials, saveSettings } from "./lib/storage";
+import { clearHistory, createSafeDataBundle, defaultSettings, emptyMaterials, getStorageDiagnostics, initializeStorage, loadHistory, loadMaterials, loadSettings, markCleanShutdown, parseSafeDataBundle, restoreLatestBackup, saveHistory, saveMaterials, saveSettings } from "./lib/storage";
 import type { StorageDiagnostics } from "./lib/storage";
 import type { AnswerFramework, AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, InterviewContextTurn, InterviewFocus, InterviewSession, InterviewTurn, LlmProfile, LlmProviderPresetId, MaterialContext, OverlayLayout, OverlaySettings, SessionRecord, WheelScrollSettings } from "./types";
 import { ANSWER_FRAMEWORK_LABELS, createAsrPreset, createDefaultLlmProfile, INTERVIEW_FOCUS_LABELS } from "./types";
@@ -342,6 +342,7 @@ function App() {
   const overlayUnlistenRef = useRef<Array<() => void>>([]);
   const overlayStatePersistTimerRef = useRef<number | undefined>(undefined);
   const overlayActionsRef = useRef<{ start: (mode: TestMode) => void; submit: () => void; stop: () => void; stopGeneration: () => void; regenerate: () => void }>({ start: () => {}, submit: () => {}, stop: () => {}, stopGeneration: () => {}, regenerate: () => {} });
+  const closeToTrayRef = useRef(true);
   const generationAbortRef = useRef<AbortController | null>(null);
   const lastQuestionRef = useRef("");
   const interviewTurnsRef = useRef<InterviewTurn[]>([]);
@@ -374,6 +375,7 @@ function App() {
   const effectiveAnswerFramework = sessionFrameworkOverride || settings.answerFramework;
   const statusLabel = sessionStage === "manual" ? "等待输入" : sessionStage === "answering" ? "正在生成回答" : sessionStage === "complete" ? sessionMode === "asr" ? "转写已完成" : "回答已完成" : sessionStage === "listening" ? "正在聆听" : sessionStage === "finalizing" ? "正在提交问题" : sessionStage === "idle" && !llmReady && testMode !== "asr" ? "待配置模型" : sessionStage === "idle" ? "未开始" : "连接异常";
   testModeRef.current = testMode;
+  closeToTrayRef.current = settings.closeToTray;
 
   function queueOverlayWindowState(patch: Partial<OverlaySettings>) {
     if (overlayStatePersistTimerRef.current) window.clearTimeout(overlayStatePersistTimerRef.current);
@@ -452,7 +454,24 @@ function App() {
   useEffect(() => {
     if (!desktopRuntime || isOverlayWindow) return;
     let unlisten: () => void = () => {};
-    void getCurrentWindow().onCloseRequested(async () => { await markCleanShutdown(); }).then((cleanup) => { unlisten = cleanup; });
+    void getCurrentWindow().onCloseRequested(async (event) => {
+      if (closeToTrayRef.current) {
+        event.preventDefault();
+        await getCurrentWindow().hide();
+        setNotice("主窗口已隐藏，Interview Lab 仍在系统托盘运行。可从托盘菜单重新打开或退出。");
+        return;
+      }
+      await markCleanShutdown();
+    }).then((cleanup) => { unlisten = cleanup; });
+    return () => unlisten();
+  }, [desktopRuntime, isOverlayWindow]);
+  useEffect(() => {
+    if (!desktopRuntime || isOverlayWindow) return;
+    let unlisten: () => void = () => {};
+    void listen("tray-quit", async () => {
+      await markCleanShutdown();
+      await invoke("exit_app");
+    }).then((cleanup) => { unlisten = cleanup; });
     return () => unlisten();
   }, [desktopRuntime, isOverlayWindow]);
   useEffect(() => { if (!repositoryUrl && materials.repository?.url) setRepositoryUrl(materials.repository.url); }, [materials.repository?.url, repositoryUrl]);
@@ -1099,6 +1118,31 @@ function App() {
     };
     input.click();
   }
+  async function restoreLatestStoredBackup() {
+    if (!desktopRuntime || isOverlayWindow) {
+      setNotice("只有桌面端 SQLite 存储支持恢复最近备份。");
+      return;
+    }
+    if (!window.confirm("恢复最近备份会覆盖当前配置、材料和会话记录，但会保留本机已有 API Key。继续吗？")) return;
+    setStorageBundleBusy(true);
+    try {
+      const snapshot = await restoreLatestBackup();
+      if (!snapshot) {
+        setNotice("还没有可恢复的本机备份。");
+        return;
+      }
+      setSettings(snapshot.settings);
+      setMaterials(snapshot.materials);
+      setHistory(snapshot.history);
+      setSelectedHistorySessionId(undefined);
+      setStorageDiagnostics(await getStorageDiagnostics());
+      setNotice(`已恢复最近备份：${snapshot.history.length} 场会话；本机已有 Key 已保留。`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "恢复最近备份失败");
+    } finally {
+      setStorageBundleBusy(false);
+    }
+  }
   overlayActionsRef.current = {
     start: (mode) => startTest(mode),
     submit: () => { void submitQuestion(); },
@@ -1187,7 +1231,8 @@ function App() {
         <div className="panel"><div className="panel-head"><div><h2>全局快捷键</h2><p>关闭后不会注册或响应该组快捷键；快捷键冲突时请更换组合。</p></div><label className="checkbox shortcut-toggle"><input type="checkbox" checked={settings.shortcutEnabled} onChange={(event) => setSettings((state) => ({ ...state, shortcutEnabled: event.target.checked }))} />启用快捷键</label></div><div className="shortcut-grid"><div className="shortcut-field"><span>提交当前问题</span><ShortcutRecorder value={settings.shortcut} onChange={(value) => setSettings((state) => ({ ...state, shortcut: value }))} /></div><div className="shortcut-field"><span>显示 / 隐藏悬浮窗</span><ShortcutRecorder value={settings.overlayToggleShortcut} onChange={(value) => setSettings((state) => ({ ...state, overlayToggleShortcut: value }))} /></div><div className="shortcut-field"><span>停止回答生成</span><ShortcutRecorder value={settings.stopGenerationShortcut} onChange={(value) => setSettings((state) => ({ ...state, stopGenerationShortcut: value }))} /></div><div className="shortcut-field"><span>切换点击穿透</span><ShortcutRecorder value={settings.clickThroughShortcut} onChange={(value) => setSettings((state) => ({ ...state, clickThroughShortcut: value }))} /></div></div></div>
         <OverlaySettingsPanel settings={settings.overlay} onChange={(patch) => setSettings((state) => ({ ...state, overlay: { ...state.overlay, ...patch } }))} />
         <div className="panel"><div className="panel-head"><div><h2>界面行为</h2><p>分别控制转写区和回答区是否响应鼠标滚轮。</p></div></div><div className="settings-toggle-grid"><label className="checkbox"><input type="checkbox" checked={settings.wheelScroll.transcript} onChange={(event) => setSettings((state) => ({ ...state, wheelScroll: { ...state.wheelScroll, transcript: event.target.checked } }))} />转写区允许滚轮滚动</label><label className="checkbox"><input type="checkbox" checked={settings.wheelScroll.answer} onChange={(event) => setSettings((state) => ({ ...state, wheelScroll: { ...state.wheelScroll, answer: event.target.checked } }))} />回答区允许滚轮滚动</label></div></div>
-        <DataSafetyPanel diagnostics={storageDiagnostics} busy={storageBundleBusy} onExport={exportSafeBackup} onImport={importSafeBackup} />
+        <div className="panel"><div className="panel-head"><div><h2>退出行为</h2><p>关闭主窗口时可继续驻留托盘，悬浮面试台不会被强制结束。</p></div></div><div className="settings-toggle-grid"><label className="checkbox"><input type="checkbox" checked={settings.closeToTray} onChange={(event) => setSettings((state) => ({ ...state, closeToTray: event.target.checked }))} />关闭主窗口后继续在托盘运行</label></div></div>
+        <DataSafetyPanel diagnostics={storageDiagnostics} busy={storageBundleBusy} onExport={exportSafeBackup} onImport={importSafeBackup} onRestore={restoreLatestStoredBackup} />
       </section>}
       {tab === "history" && <section className="panel history-panel">{selectedHistorySessionId && history.some((session) => session.id === selectedHistorySessionId) ? (() => {
         const session = history.find((item) => item.id === selectedHistorySessionId)!;
@@ -1223,13 +1268,13 @@ function OverlaySettingsPanel({ settings, onChange }: { settings: OverlaySetting
   </div>;
 }
 
-function DataSafetyPanel({ diagnostics, busy, onExport, onImport }: { diagnostics: StorageDiagnostics | null; busy: boolean; onExport: () => void; onImport: () => void }) {
+function DataSafetyPanel({ diagnostics, busy, onExport, onImport, onRestore }: { diagnostics: StorageDiagnostics | null; busy: boolean; onExport: () => void; onImport: () => void; onRestore: () => void | Promise<void> }) {
   const backendLabel = diagnostics?.backend === "sqlite" ? "SQLite" : diagnostics?.backend === "localStorage" ? "浏览器预览存储" : "检测中";
   const integrityLabel = diagnostics?.integrity === "ok" ? "完整性正常" : diagnostics?.integrity === "error" ? "需要检查" : "未检测";
   return <div className="panel data-safety-panel">
-    <div className="panel-head"><div><div className="panel-kicker">DATA SAFETY</div><h2>数据与恢复</h2><p>安全备份不包含 API Key；桌面端密钥只保存在 Stronghold，导入后保留本机已有凭证。</p></div><span className={`context-state ${diagnostics?.integrity === "ok" ? "ready" : diagnostics?.integrity === "error" ? "pending" : "muted"}`}><i />{integrityLabel}</span></div>
+    <div className="panel-head"><div><div className="panel-kicker">DATA SAFETY</div><h2>数据与恢复</h2><p>安全备份不包含 API Key；桌面端密钥只保存在 Stronghold，导入或恢复后保留本机已有凭证。</p></div><span className={`context-state ${diagnostics?.integrity === "ok" ? "ready" : diagnostics?.integrity === "error" ? "pending" : "muted"}`}><i />{integrityLabel}</span></div>
     <div className="storage-diagnostics"><span>存储：{backendLabel}</span><span>数据版本：{diagnostics?.schemaVersion || BUILD_INFO.dataSchema}</span><span>密钥：{diagnostics?.secretStore === "stronghold" ? "Stronghold" : "不持久化"}</span><span>备份：{diagnostics?.backupCount ?? "—"} 份</span><span className={diagnostics?.uncleanExit ? "diagnostic-warning" : ""}>{diagnostics?.uncleanExit ? "上次异常退出，已保留现有数据" : "上次退出状态正常"}</span>{diagnostics?.lastCleanShutdownAt && <span>上次正常退出：{new Date(diagnostics.lastCleanShutdownAt).toLocaleString()}</span>}{diagnostics?.lastBackupAt && <span>最近备份：{new Date(diagnostics.lastBackupAt).toLocaleString()}</span>}<span>构建：v{BUILD_INFO.version} · {BUILD_INFO.commit}{BUILD_INFO.builtAt ? ` · ${new Date(BUILD_INFO.builtAt).toLocaleString()}` : ""}</span></div>
-    <div className="storage-actions"><button onClick={onExport}>导出安全备份</button><button onClick={onImport} disabled={busy}>{busy ? "导入中…" : "导入安全备份"}</button></div>
+    <div className="storage-actions"><button onClick={onExport}>导出安全备份</button><button onClick={onImport} disabled={busy}>{busy ? "处理中…" : "导入安全备份"}</button><button onClick={() => void onRestore()} disabled={busy || diagnostics?.backend !== "sqlite" || !diagnostics?.backupCount}>{busy ? "处理中…" : "恢复最近备份"}</button></div>
   </div>;
 }
 

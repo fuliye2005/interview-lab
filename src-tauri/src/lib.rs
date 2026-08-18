@@ -4,6 +4,11 @@ use audio::{start_system_audio_capture, stop_system_audio_capture, AudioCaptureS
 use blake2::{Blake2b512, Digest};
 use keyring::Entry;
 use rand::RngCore;
+use tauri::{
+    menu::{MenuBuilder, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Emitter, Manager,
+};
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 const DATABASE_PATH: &str = "sqlite:interview-lab.db";
@@ -14,6 +19,11 @@ const KEYRING_USER: &str = "stronghold-vault-password";
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
+}
+
+#[tauri::command]
+fn exit_app(app: tauri::AppHandle) {
+    app.exit(0);
 }
 
 #[tauri::command]
@@ -53,6 +63,44 @@ fn database_migrations() -> Vec<Migration> {
 pub fn run() {
     tauri::Builder::default()
         .manage(AudioCaptureState::default())
+        .setup(|app| {
+            let show = MenuItem::with_id(app, "show", "打开主窗口", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "退出 Interview Lab", true, None::<&str>)?;
+            let menu = MenuBuilder::new(app).items(&[&show, &quit]).build()?;
+            let _tray = TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.unminimize();
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "quit" => {
+                        let _ = app.emit("tray-quit", ());
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        if let Some(window) = tray.app_handle().get_webview_window("main") {
+                            let _ = window.unminimize();
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+            Ok(())
+        })
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(
@@ -61,7 +109,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_stronghold::Builder::new(stronghold_password).build())
-        .invoke_handler(tauri::generate_handler![greet, get_vault_password, start_system_audio_capture, stop_system_audio_capture])
+        .invoke_handler(tauri::generate_handler![greet, exit_app, get_vault_password, start_system_audio_capture, stop_system_audio_capture])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
