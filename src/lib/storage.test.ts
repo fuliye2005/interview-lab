@@ -90,6 +90,26 @@ describe("loadSettings", () => {
     expect(persisted.llmProfiles[0].apiKey).toBe("");
   });
 
+  it("persists provider health without leaking the credential", async () => {
+    const values = setStoredSettings(null);
+    const settings = defaultSettings();
+    const credential = "test-health-secret-123456789";
+    settings.llmProfiles[0].apiKey = credential;
+    settings.llmProfiles[0].health = {
+      status: "error",
+      testedAt: "2026-08-18T08:00:00.000Z",
+      message: `请求失败 api_key=${credential}`,
+    };
+
+    await saveSettings(settings);
+    const persisted = JSON.parse(values.get(settingsKey) || "{}") as typeof settings;
+    const healthMessage = persisted.llmProfiles[0].health?.message || "";
+
+    expect(persisted.llmProfiles[0].health).toMatchObject({ status: "error", testedAt: "2026-08-18T08:00:00.000Z" });
+    expect(healthMessage).not.toContain(credential);
+    expect(healthMessage).toContain("********");
+  });
+
   it("exports a backup without credentials and accepts its normalized shape", () => {
     const settings = defaultSettings();
     settings.asr.apiKey = "asr-secret";

@@ -6,6 +6,17 @@ export function sanitizeAnswerText(text: string) {
   return text.replace(/\*/g, "");
 }
 
+/** Keep provider diagnostics useful without allowing credentials into persisted messages. */
+export function sanitizeLlmError(error: unknown, credential = "") {
+  let message = error instanceof Error ? error.message : typeof error === "string" ? error : "连接测试失败";
+  if (credential.trim()) message = message.split(credential).join("********");
+  return message
+    .replace(/Bearer\s+[^\s,;"']+/gi, "Bearer ********")
+    .replace(/((?:api[_-]?key|access[_-]?token|secret|token)\s*[:=]\s*["']?)[^\s,;}"']+/gi, "$1********")
+    .replace(/\b(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{12,}|AIza[A-Za-z0-9_-]{16,}|xox[baprs]-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{16})\b/g, "********")
+    .slice(0, 600);
+}
+
 export function selectInterviewContext(previousTurns: InterviewTurn[], contextWindow = 8000) {
   const maxChars = Math.max(1200, Math.floor(Math.max(1000, contextWindow) * 1.6));
   const selected: InterviewTurn[] = [];

@@ -2,6 +2,7 @@ export type LlmProtocol = "responses" | "chat-completions";
 export type AnswerDetail = "concise" | "balanced" | "detailed";
 export type AnswerFramework = "balanced" | "star" | "project-review" | "incident" | "customer-objection" | "tradeoff" | "collaboration";
 export type ReasoningEffort = "none" | "low" | "medium" | "high";
+export type LlmHealthStatus = "success" | "error";
 export type LlmProviderPresetId = "custom" | "openai-compatible" | "openai-responses" | "openrouter" | "deepseek" | "kimi" | "qwen" | "doubao" | "ollama";
 export type AsrPreset = "aliyun-trial" | "aliyun-nls" | "volcengine-asr" | "generic";
 export type InterviewFocus = "technical-business" | "technical-project" | "customer-solution" | "operations-delivery" | "team-collaboration";
@@ -39,6 +40,13 @@ export interface LlmProfile {
   contextWindow?: number;
   answerDetail: AnswerDetail;
   reasoningEffort: ReasoningEffort;
+  health?: {
+    status: LlmHealthStatus;
+    testedAt: string;
+    latencyMs?: number;
+    firstTokenMs?: number;
+    message?: string;
+  };
 }
 
 export interface AsrProviderConfig {

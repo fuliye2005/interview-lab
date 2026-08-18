@@ -35,12 +35,13 @@ describe("LLM provider presets", () => {
   });
 
   it("applies a preset without replacing an existing key", () => {
-    const result = applyLlmProviderPreset(profile(), "deepseek");
+    const result = applyLlmProviderPreset(profile({ health: { status: "success", testedAt: "2026-08-18T08:00:00.000Z", latencyMs: 42 } }), "deepseek");
 
     expect(result.provider).toBe("deepseek");
     expect(result.baseUrl).toBe("https://api.deepseek.com/v1");
     expect(result.model).toBe("deepseek-chat");
     expect(result.apiKey).toBe("secret");
+    expect(result.health).toBeUndefined();
     expect(result.contextWindow).toBe(64000);
     expect(providerLabel(result)).toBe("DeepSeek");
   });

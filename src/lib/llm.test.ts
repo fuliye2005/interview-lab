@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildInterviewPrompt, listLlmModels, sanitizeAnswerText, selectInterviewContext, streamLlm, testLlmConnection } from "./llm";
+import { buildInterviewPrompt, listLlmModels, sanitizeAnswerText, sanitizeLlmError, selectInterviewContext, streamLlm, testLlmConnection } from "./llm";
 import type { LlmProfile, MaterialContext } from "../types";
 
 const materials: MaterialContext = {
@@ -202,5 +202,15 @@ describe("streamLlm reasoning settings", () => {
 describe("sanitizeAnswerText", () => {
   it("removes markdown asterisks before display", () => {
     expect(sanitizeAnswerText("**回答提纲**\n* 第一条\n普通文本")).toBe("回答提纲\n 第一条\n普通文本");
+  });
+});
+
+describe("sanitizeLlmError", () => {
+  it("removes provider credentials from diagnostic text", () => {
+    const credential = "test-credential-secret-123456789";
+    const message = sanitizeLlmError(new Error(`401 api_key=${credential}; Bearer ${credential}`), credential);
+
+    expect(message).not.toContain(credential);
+    expect(message).toContain("********");
   });
 });

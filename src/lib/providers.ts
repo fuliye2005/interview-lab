@@ -112,5 +112,6 @@ export function applyLlmProviderPreset(profile: LlmProfile, id: LlmProviderPrese
     model: profile.model || preset.defaultModel,
     contextWindow: profile.contextWindow && profile.contextWindow !== 8000 ? profile.contextWindow : preset.contextWindow,
     modelOptions: [],
+    health: undefined,
   };
 }

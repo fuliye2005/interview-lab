@@ -1,4 +1,5 @@
 import { isTauri, invoke } from "@tauri-apps/api/core";
+import { sanitizeLlmError } from "./llm";
 import type { AnswerFramework, AppSettings, AsrPreset, AsrProviderConfig, InterviewFocus, InterviewSession, LlmProfile, MaterialContext, SessionRecord } from "../types";
 import { createAsrPreset, createDefaultAsrConfig, createDefaultLlmProfile } from "../types";
 
@@ -128,6 +129,7 @@ function normalizeLlmProfile(profile: Partial<LlmProfile>): LlmProfile {
   const modelOptions = Array.isArray(profile.modelOptions)
     ? profile.modelOptions.filter((model): model is string => typeof model === "string").slice(0, 200)
     : defaults.modelOptions;
+  const apiKey = typeof profile.apiKey === "string" ? profile.apiKey : "";
   return {
     ...defaults,
     ...profile,
@@ -138,8 +140,24 @@ function normalizeLlmProfile(profile: Partial<LlmProfile>): LlmProfile {
     modelOptions,
     answerDetail: profile.answerDetail === "concise" || profile.answerDetail === "detailed" || profile.answerDetail === "balanced" ? profile.answerDetail : defaults.answerDetail,
     reasoningEffort: profile.reasoningEffort === "low" || profile.reasoningEffort === "medium" || profile.reasoningEffort === "high" || profile.reasoningEffort === "none" ? profile.reasoningEffort : defaults.reasoningEffort,
-    apiKey: typeof profile.apiKey === "string" ? profile.apiKey : "",
+    apiKey,
+    health: normalizeLlmHealth(profile.health, apiKey),
   };
+}
+
+function normalizeLlmHealth(value: unknown, credential = ""): LlmProfile["health"] {
+  if (!value || typeof value !== "object") return undefined;
+  const source = value as Record<string, unknown>;
+  if (source.status !== "success" && source.status !== "error") return undefined;
+  if (typeof source.testedAt !== "string" || !source.testedAt.trim()) return undefined;
+  const health: NonNullable<LlmProfile["health"]> = {
+    status: source.status,
+    testedAt: source.testedAt.slice(0, 80),
+  };
+  if (Number.isFinite(source.latencyMs)) health.latencyMs = Math.max(0, Math.round(Number(source.latencyMs)));
+  if (Number.isFinite(source.firstTokenMs)) health.firstTokenMs = Math.max(0, Math.round(Number(source.firstTokenMs)));
+  if (typeof source.message === "string" && source.message.trim()) health.message = sanitizeLlmError(source.message, credential);
+  return health;
 }
 
 function normalizeSettings(stored?: Partial<AppSettings> | null): AppSettings {
@@ -327,7 +345,7 @@ function redactSettings(settings: AppSettings): AppSettings {
     ...settings,
     asr: { ...settings.asr, apiKey: "" },
     asrProfiles,
-    llmProfiles: settings.llmProfiles.map((profile) => ({ ...profile, apiKey: "" })),
+    llmProfiles: settings.llmProfiles.map((profile) => ({ ...profile, apiKey: "", health: normalizeLlmHealth(profile.health, profile.apiKey) })),
   };
 }
 
