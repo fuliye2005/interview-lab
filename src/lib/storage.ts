@@ -29,6 +29,25 @@ export interface PersistentSnapshot {
   history: InterviewSession[];
 }
 
+export interface SafeDataBundle {
+  format: "interview-lab-backup";
+  version: 1;
+  exportedAt: string;
+  note: "API keys are intentionally excluded; re-enter them after import.";
+  settings: AppSettings;
+  materials: MaterialContext;
+  history: InterviewSession[];
+}
+
+export interface StorageDiagnostics {
+  backend: "sqlite" | "localStorage";
+  schemaVersion: number;
+  integrity: "ok" | "unknown" | "error";
+  secretStore: "stronghold" | "browser-not-persisted";
+  backupCount: number;
+  lastBackupAt?: string;
+}
+
 interface PersistentContext {
   db: SqlDatabase;
   store: SecretStore;
@@ -237,6 +256,40 @@ export function loadHistory(): InterviewSession[] {
   return normalizeHistory(read<unknown>(HISTORY_KEY, []));
 }
 
+export function createSafeDataBundle(snapshot: PersistentSnapshot): SafeDataBundle {
+  return {
+    format: "interview-lab-backup",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    note: "API keys are intentionally excluded; re-enter them after import.",
+    settings: redactSettings(snapshot.settings),
+    materials: snapshot.materials,
+    history: snapshot.history.slice(0, 50),
+  };
+}
+
+export function parseSafeDataBundle(raw: string): SafeDataBundle {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new Error("备份文件不是合法 JSON");
+  }
+  if (!value || typeof value !== "object") throw new Error("备份文件格式不正确");
+  const source = value as Partial<SafeDataBundle>;
+  if (source.format !== "interview-lab-backup" || source.version !== 1) throw new Error("不支持的 Interview Lab 备份版本");
+  if (!source.settings || !source.materials || !Array.isArray(source.history)) throw new Error("备份文件缺少配置、材料或会话记录");
+  return {
+    format: "interview-lab-backup",
+    version: 1,
+    exportedAt: typeof source.exportedAt === "string" ? source.exportedAt : new Date().toISOString(),
+    note: "API keys are intentionally excluded; re-enter them after import.",
+    settings: redactSettings(normalizeSettings(source.settings as Partial<AppSettings>)),
+    materials: normalizeMaterials(source.materials),
+    history: normalizeHistory(source.history),
+  };
+}
+
 function hasLegacyData() {
   try {
     return Boolean(window.localStorage.getItem(SETTINGS_KEY) || window.localStorage.getItem(MATERIALS_KEY) || window.localStorage.getItem(HISTORY_KEY));
@@ -432,6 +485,42 @@ async function getTauriContext() {
   return contextPromise;
 }
 
+export async function getStorageDiagnostics(): Promise<StorageDiagnostics> {
+  if (!isTauri()) {
+    return { backend: "localStorage", schemaVersion: 0, integrity: "unknown", secretStore: "browser-not-persisted", backupCount: 0 };
+  }
+  try {
+    const context = await getTauriContext();
+    if (!context) return { backend: "localStorage", schemaVersion: 0, integrity: "unknown", secretStore: "browser-not-persisted", backupCount: 0 };
+    let schemaVersion = 1;
+    let integrity: StorageDiagnostics["integrity"] = "unknown";
+    try {
+      const rows = await context.db.select<Array<{ user_version?: number }>>("PRAGMA user_version");
+      schemaVersion = Number(rows[0]?.user_version) || 1;
+    } catch {
+      schemaVersion = 1;
+    }
+    try {
+      const rows = await context.db.select<Array<Record<string, unknown>>>("PRAGMA quick_check");
+      const result = Object.values(rows[0] ?? {})[0];
+      integrity = result === "ok" ? "ok" : "error";
+    } catch {
+      integrity = "unknown";
+    }
+    const backups = await context.db.select<Array<{ created_at?: string }>>("SELECT created_at FROM storage_backups ORDER BY id DESC");
+    return {
+      backend: "sqlite",
+      schemaVersion,
+      integrity,
+      secretStore: "stronghold",
+      backupCount: backups.length,
+      lastBackupAt: backups[0]?.created_at,
+    };
+  } catch {
+    return { backend: "sqlite", schemaVersion: 0, integrity: "error", secretStore: "stronghold", backupCount: 0 };
+  }
+}
+
 export async function initializeStorage(): Promise<PersistentSnapshot> {
   const context = await getTauriContext();
   if (!context) return { settings: loadSettings(), materials: loadMaterials(), history: loadHistory() };
@@ -440,7 +529,8 @@ export async function initializeStorage(): Promise<PersistentSnapshot> {
 
 export function saveSettings(settings: AppSettings): Promise<void> {
   if (!isTauri()) {
-    write(SETTINGS_KEY, settings);
+    // Browser previews never persist credentials; the desktop build stores them in Stronghold.
+    write(SETTINGS_KEY, redactSettings(settings));
     return Promise.resolve();
   }
   return getTauriContext().then((context) => context ? enqueue(context, () => persistSettingsNow(context, settings, "settings update")) : undefined).catch(() => undefined);

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadHistory, loadSettings } from "./storage";
+import { createSafeDataBundle, defaultSettings, loadHistory, loadSettings, parseSafeDataBundle, saveSettings } from "./storage";
 
 const historyKey = "interview-lab.history.v1";
 const settingsKey = "interview-lab.settings.v1";
@@ -26,6 +26,7 @@ function setStoredSettings(value: unknown) {
       removeItem: (key: string) => values.delete(key),
     },
   });
+  return values;
 }
 
 describe("loadHistory", () => {
@@ -75,5 +76,41 @@ describe("loadSettings", () => {
     setStoredSettings({ answerFramework: "invented-framework" });
 
     expect(loadSettings().answerFramework).toBe("balanced");
+  });
+
+  it("does not persist credentials in browser preview storage", async () => {
+    const values = setStoredSettings(null);
+    const settings = defaultSettings();
+    settings.asr.apiKey = "asr-secret";
+    settings.llmProfiles[0].apiKey = "llm-secret";
+    await saveSettings(settings);
+    const persisted = JSON.parse(values.get(settingsKey) || "{}") as typeof settings;
+
+    expect(persisted.asr.apiKey).toBe("");
+    expect(persisted.llmProfiles[0].apiKey).toBe("");
+  });
+
+  it("exports a backup without credentials and accepts its normalized shape", () => {
+    const settings = defaultSettings();
+    settings.asr.apiKey = "asr-secret";
+    settings.asrProfiles["aliyun-trial"]!.apiKey = "preset-secret";
+    settings.llmProfiles[0].apiKey = "llm-secret";
+    const bundle = createSafeDataBundle({ settings, materials: { resume: "简历", jobDescription: "JD", personalNotes: "", candidateSummary: "", jobSummary: "", confirmed: false }, history: [] });
+
+    expect(bundle.settings.asr.apiKey).toBe("");
+    expect(bundle.settings.asrProfiles["aliyun-trial"]?.apiKey).toBe("");
+    expect(bundle.settings.llmProfiles[0].apiKey).toBe("");
+    expect(parseSafeDataBundle(JSON.stringify(bundle))).toMatchObject({ format: "interview-lab-backup", version: 1, history: [] });
+    const tampered = JSON.parse(JSON.stringify(bundle)) as { settings: typeof bundle.settings };
+    tampered.settings.llmProfiles[0].apiKey = "injected-secret";
+    tampered.settings.asrProfiles["aliyun-trial"]!.apiKey = "injected-asr-secret";
+    expect(parseSafeDataBundle(JSON.stringify(tampered)).settings.llmProfiles[0].apiKey).toBe("");
+    expect(parseSafeDataBundle(JSON.stringify(tampered)).settings.asrProfiles["aliyun-trial"]?.apiKey).toBe("");
+  });
+
+  it("rejects malformed or incompatible backup files before touching storage", () => {
+    expect(() => parseSafeDataBundle("not-json")).toThrow("不是合法 JSON");
+    expect(() => parseSafeDataBundle(JSON.stringify({ format: "other", version: 1 }))).toThrow("不支持");
+    expect(() => parseSafeDataBundle(JSON.stringify({ format: "interview-lab-backup", version: 1, settings: {}, materials: {} }))).toThrow("缺少配置");
   });
 });
