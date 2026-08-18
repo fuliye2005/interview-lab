@@ -104,6 +104,8 @@ button { white-space: nowrap; }
 .context-state.ready { color: #a8f2d2; border-color: #24674f; background: #102c27; }.context-state.pending { color: #f6d58d; border-color: #745c29; background: #2b2412; }
 .context-panel .panel-head { align-items: flex-start; }
 .config-overview { display: flex; }
+.context-window-field small { color: #75839a; font-size: 11px; }
+.config-preview { margin-top: 12px; }.config-preview > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }.config-preview strong { color: #d3ddf1; font-size: 12px; }.config-preview span { color: #7888a3; font-size: 11px; }.config-preview textarea { min-height: 154px; resize: vertical; color: #cdd8ed; background: #0c1423; font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; line-height: 1.55; }
 .materials-grid .panel, .settings-stack .panel, .history-panel { padding: 14px; }
 .materials-grid textarea, .settings-stack textarea { padding: 8px 10px; font-size: 13px; }
 .materials-grid label, .settings-stack label { gap: 5px; font-size: 12px; }

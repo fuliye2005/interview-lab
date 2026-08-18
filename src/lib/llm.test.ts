@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildInterviewPrompt, sanitizeAnswerText, streamLlm } from "./llm";
+import { buildInterviewPrompt, sanitizeAnswerText, selectInterviewContext, streamLlm } from "./llm";
 import type { LlmProfile, MaterialContext } from "../types";
 
 const materials: MaterialContext = {
@@ -93,6 +93,18 @@ describe("buildInterviewPrompt", () => {
 
     expect(prompt).toContain("实施、运维或技术支持岗位");
     expect(prompt).toContain("不要将回答写成算法或代码题解法");
+  });
+
+  it("keeps the newest turns when a long interview reaches the context window", () => {
+    const turns = Array.from({ length: 12 }, (_, index) => ({ question: `问题 ${index + 1}`, answer: "很长的回答内容。".repeat(100) }));
+    const selected = selectInterviewContext(turns, 1200);
+
+    expect(selected.omittedCount).toBeGreaterThan(0);
+    expect(selected.turns[selected.turns.length - 1]?.question).toBe("问题 12");
+    const prompt = buildInterviewPrompt("当前问题", materials, turns, "balanced", "technical-business", 1200);
+    expect(prompt).toContain("更早的");
+    expect(prompt).toContain("问题 12");
+    expect(prompt).not.toContain("问题 1\n");
   });
 });
 
