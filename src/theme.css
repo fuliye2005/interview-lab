@@ -72,6 +72,26 @@ textarea { resize: vertical; line-height: 1.5; }
 .overlay-answer-status { color: #7f90ad; font-size: 10px; }.overlay-answer-status.generating { color: #b3a9ff; }.overlay-answer-status.complete { color: #76e2ba; }.overlay-answer-status.error { color: #ffaaa8; }
 .overlay-answer { flex: 1; min-height: 90px; max-height: 205px; overflow: auto; padding: 10px; border: 1px solid #2b3d5c; border-radius: 8px; background: #0f192a; color: #eaf1ff; white-space: pre-wrap; line-height: 1.65; font-size: 12px; overscroll-behavior: contain; }
 .overlay-footer { color: #6e809e; font-size: 10px; }.overlay-footer button { padding: 6px 9px; font-size: 10px; }
+.overlay-shell { zoom: var(--overlay-font-scale, 1); }
+.overlay-settings-strip { display: grid; grid-template-columns: auto minmax(100px, 1fr) minmax(100px, 1fr) auto; align-items: center; gap: 7px; padding: 6px 7px; border: 1px solid #23344f; border-radius: 7px; background: #101b2d; }
+.overlay-settings-strip label { display: flex; align-items: center; gap: 5px; min-width: 0; color: #8294b1; font-size: 10px; }
+.overlay-settings-strip select { width: auto; min-width: 75px; padding: 5px 20px 5px 7px; font-size: 10px; }
+.overlay-range input[type="range"] { min-width: 48px; accent-color: #718cff; }
+.overlay-icon-button, .overlay-toggle { padding: 5px 7px; border: 1px solid #2b3d5c; border-radius: 6px; color: #aab9d3; background: #17243a; box-shadow: none; font-size: 10px; }
+.overlay-icon-button:hover, .overlay-toggle:hover { border-color: #718cff; background: #203354; transform: none; }
+.overlay-toggle.active { border-color: #b98052; color: #ffd4a8; background: #352718; }
+.overlay-context-drawer { display: grid; gap: 5px; padding: 8px 9px; border: 1px solid #31486c; border-radius: 7px; color: #9fb1cf; background: #101c30; font-size: 10px; }
+.overlay-context-drawer > div { display: flex; align-items: center; justify-content: space-between; color: #d4def1; }
+.overlay-context-drawer .text-button { font-size: 10px; }
+.overlay-layout-compact .overlay-body { gap: 6px; padding: 8px 9px 9px; }
+.overlay-layout-compact .overlay-settings-strip { display: none; }
+.overlay-layout-compact .overlay-question { min-height: 48px; max-height: 70px; }
+.overlay-layout-compact .overlay-answer { min-height: 70px; max-height: 145px; padding: 8px; }
+.overlay-layout-transcript .overlay-question { min-height: 72px; }
+.overlay-layout-answer .overlay-answer { min-height: 150px; max-height: 280px; }
+.overlay-settings-panel .panel-head { align-items: flex-start; }
+.overlay-settings-grid { margin-top: 2px; }
+.overlay-toggle-grid { margin-top: 12px; }
 @media (max-width: 1050px) { body { min-width: 0; }.app-shell { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }.sidebar { min-height: auto; flex-direction: row; align-items: center; overflow-x: auto; }.brand { padding: 0 12px 0 0; }.sidebar-footer { display: none; }.content { padding: 20px; }.content.session-content { overflow-y: auto; }.session-grid { height: auto; min-height: 620px; grid-template-columns: 1fr; }.materials-grid, .summary-grid { grid-template-columns: 1fr; }.full-width { grid-column: auto; }.form-grid.three { grid-template-columns: 1fr 1fr; } }
 .profile.active-profile { border-color: #5875c9; box-shadow: inset 3px 0 #6d8bff; }.profile-title { align-items: flex-start; }.profile-identity { display: grid; min-width: 0; gap: 4px; }.profile-identity strong { color: #edf3ff; font-size: 14px; }.profile-identity span { overflow: hidden; color: #8496b2; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.profile-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 7px; }.profile-actions button { padding: 6px 9px; font-size: 11px; }.profile-actions .radio { margin: 0; white-space: nowrap; }.profile-summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 0 2px; color: #7f91ad; font-size: 11px; }.profile-summary > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.profile-summary small { flex: 0 0 auto; }.profile-test-success { color: #8fe7c6; }.profile-test-error { max-width: 52%; overflow: hidden; color: #f5a9b1; text-overflow: ellipsis; white-space: nowrap; }.shortcut-toggle { margin: 0; white-space: nowrap; }
 

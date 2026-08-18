@@ -111,6 +111,19 @@ export interface WheelScrollSettings {
   answer: boolean;
 }
 
+export type OverlayLayout = "compact" | "standard" | "answer" | "transcript";
+
+export interface OverlaySettings {
+  alwaysOnTop: boolean;
+  opacity: number;
+  fontScale: number;
+  layout: OverlayLayout;
+  clickThrough: boolean;
+  autoFollow: boolean;
+  position?: { x: number; y: number };
+  size?: { width: number; height: number };
+}
+
 export type AsrStatus = "idle" | "connecting" | "listening" | "finalizing" | "error";
 export type AnswerStatus = "idle" | "generating" | "complete" | "error";
 
@@ -124,6 +137,7 @@ export interface AppSettings {
   interviewFocus: InterviewFocus;
   sessionTitleDraft: string;
   wheelScroll: WheelScrollSettings;
+  overlay: OverlaySettings;
 }
 
 const commonAsrConfig = (): Omit<AsrProviderConfig, "name" | "preset" | "protocol" | "wsUrl" | "apiKey" | "audioMode"> => ({

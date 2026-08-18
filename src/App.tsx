@@ -1,5 +1,6 @@
-import { ChangeEvent, Dispatch, SetStateAction, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, CSSProperties, Dispatch, SetStateAction, useEffect, useMemo, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
 import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -12,7 +13,7 @@ import { applyLlmProviderPreset, LLM_PROVIDER_PRESETS, providerLabel, providerRe
 import { importRepository as importRepositoryMaterial } from "./lib/repository";
 import { formatShortcut, shortcutKeyToken, toGlobalShortcut } from "./lib/shortcut";
 import { clearHistory, defaultSettings, emptyMaterials, initializeStorage, loadHistory, loadMaterials, loadSettings, saveHistory, saveMaterials, saveSettings } from "./lib/storage";
-import type { AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, InterviewFocus, InterviewSession, InterviewTurn, LlmProfile, LlmProviderPresetId, MaterialContext, SessionRecord } from "./types";
+import type { AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, InterviewFocus, InterviewSession, InterviewTurn, LlmProfile, LlmProviderPresetId, MaterialContext, OverlayLayout, OverlaySettings, SessionRecord, WheelScrollSettings } from "./types";
 import { createAsrPreset, createDefaultLlmProfile, INTERVIEW_FOCUS_LABELS } from "./types";
 import "./App.css";
 import "./theme.css";
@@ -41,6 +42,12 @@ type OverlayState = {
   sessionTitle: string;
   llmReady: boolean;
   asrReady: boolean;
+  overlaySettings: OverlaySettings;
+  wheelScroll: WheelScrollSettings;
+  interviewFocus: string;
+  materialsLabel: string;
+  carriedTurnCount: number;
+  sourceTitle: string;
 };
 
 const DEFAULT_OVERLAY_STATE: OverlayState = {
@@ -58,6 +65,20 @@ const DEFAULT_OVERLAY_STATE: OverlayState = {
   sessionTitle: "",
   llmReady: false,
   asrReady: false,
+  overlaySettings: {
+    alwaysOnTop: true,
+    opacity: 0.96,
+    fontScale: 1,
+    layout: "standard",
+    clickThrough: false,
+    autoFollow: true,
+    size: { width: 520, height: 440 },
+  },
+  wheelScroll: { transcript: false, answer: false },
+  interviewFocus: "",
+  materialsLabel: "未添加材料",
+  carriedTurnCount: 0,
+  sourceTitle: "",
 };
 
 function splitAnswerText(raw: string) {
@@ -122,6 +143,8 @@ function Overlay() {
   const [questionDraft, setQuestionDraft] = useState("");
   const [testMode, setTestMode] = useState<TestMode>("all");
   const [copyNotice, setCopyNotice] = useState("");
+  const [contextOpen, setContextOpen] = useState(false);
+  const answerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     const previousMinWidth = document.body.style.minWidth;
@@ -148,6 +171,10 @@ function Overlay() {
     });
     return () => { disposed = true; unlistenFns.forEach((cleanup) => cleanup()); };
   }, []);
+  useEffect(() => {
+    if (!state.overlaySettings.autoFollow || !answerRef.current) return;
+    answerRef.current.scrollTop = answerRef.current.scrollHeight;
+  }, [state.answer, state.overlaySettings.autoFollow]);
 
   function sendCommand(command: OverlayCommand["command"]) {
     void emit<OverlayCommand>("overlay-command", { command, testMode });
@@ -159,6 +186,9 @@ function Overlay() {
   function changeMode(value: TestMode) {
     setTestMode(value);
     void emit("overlay-mode", { testMode: value });
+  }
+  function changeOverlaySettings(patch: Partial<OverlaySettings>) {
+    void emit("overlay-settings", patch);
   }
   async function copyAnswer() {
     if (!state.answer.trim()) return;
@@ -177,28 +207,49 @@ function Overlay() {
     await getCurrentWindow().close();
   }
 
+  const layout = state.overlaySettings.layout;
+  const showAnswer = layout !== "transcript";
+  const showTranscript = layout !== "answer";
+  const compact = layout === "compact";
   const modeLabel = testMode === "asr" ? "语音转文字" : testMode === "answer" ? "问题回答" : "全部启动";
   const answerLabel = state.answerStatus === "generating" ? "正在生成" : state.answerStatus === "complete" ? "回答完成" : state.answerStatus === "error" ? "生成失败" : "等待回答";
   const submitDisabled = !state.sessionActive || state.answerStatus === "generating" || (state.sessionMode === "answer" && !questionDraft.trim());
+  const overlayStyle = { opacity: state.overlaySettings.opacity, "--overlay-font-scale": state.overlaySettings.fontScale } as CSSProperties;
 
-  return <main className="overlay-shell">
+  return <main className={"overlay-shell overlay-layout-" + layout} style={overlayStyle}>
     <header className="overlay-header" data-tauri-drag-region>
       <div className="overlay-title" data-tauri-drag-region><span className={state.sessionActive ? "overlay-live-dot active" : "overlay-live-dot"} /><div data-tauri-drag-region><strong>悬浮面试台</strong><small>{state.sessionTitle || "未开始会话"} · {state.turnCount} 轮上下文</small></div></div>
       <div className="overlay-window-actions"><button title="隐藏悬浮窗" onClick={() => void hideWindow()}>—</button><button title="关闭悬浮窗" onClick={() => void closeWindow()}>×</button></div>
     </header>
     <section className="overlay-body">
-      <div className="overlay-toolbar"><label><span>测试内容</span><select value={testMode} onChange={(event) => changeMode(event.target.value as TestMode)} disabled={state.sessionActive}><option value="all">全部启动</option><option value="asr">语音转文字</option><option value="answer">问题回答</option></select></label><span className={`overlay-status ${state.sessionActive ? "active" : ""}`}><i />{state.statusLabel} · {modeLabel}</span></div>
+      <div className="overlay-toolbar">
+        <label><span>测试内容</span><select value={testMode} onChange={(event) => changeMode(event.target.value as TestMode)} disabled={state.sessionActive}><option value="all">全部启动</option><option value="asr">语音转文字</option><option value="answer">问题回答</option></select></label>
+        <span className={"overlay-status " + (state.sessionActive ? "active" : "")}><i />{state.statusLabel} · {modeLabel}</span>
+        <button className="overlay-icon-button" title={state.overlaySettings.alwaysOnTop ? "取消置顶" : "置顶悬浮窗"} onClick={() => changeOverlaySettings({ alwaysOnTop: !state.overlaySettings.alwaysOnTop })}>{state.overlaySettings.alwaysOnTop ? "置顶" : "普通"}</button>
+        <button className="overlay-icon-button" title="打开上下文抽屉" onClick={() => setContextOpen((open) => !open)}>上下文</button>
+      </div>
+      <div className="overlay-settings-strip">
+        <label><span>布局</span><select value={layout} onChange={(event) => changeOverlaySettings({ layout: event.target.value as OverlayLayout })}><option value="compact">紧凑</option><option value="standard">标准</option><option value="answer">只回答</option><option value="transcript">只转写</option></select></label>
+        <label className="overlay-range"><span>透明度</span><input type="range" min="0.55" max="1" step="0.01" value={state.overlaySettings.opacity} onChange={(event) => changeOverlaySettings({ opacity: Number(event.target.value) })} /></label>
+        <label className="overlay-range"><span>字号</span><input type="range" min="0.8" max="1.35" step="0.05" value={state.overlaySettings.fontScale} onChange={(event) => changeOverlaySettings({ fontScale: Number(event.target.value) })} /></label>
+        <button className={"overlay-toggle " + (state.overlaySettings.clickThrough ? "active" : "")} title="点击穿透需要从主窗口关闭" onClick={() => changeOverlaySettings({ clickThrough: !state.overlaySettings.clickThrough })}>{state.overlaySettings.clickThrough ? "穿透中" : "可交互"}</button>
+      </div>
+      {contextOpen && <aside className="overlay-context-drawer">
+        <div><strong>本次上下文</strong><button className="text-button" onClick={() => setContextOpen(false)}>收起</button></div>
+        <span>岗位方向：{state.interviewFocus || "未设置"}</span>
+        <span>材料状态：{state.materialsLabel}</span>
+        <span>当前轮数：{state.turnCount} · 承接 {state.carriedTurnCount} 轮</span>
+        {state.sourceTitle && <span>来源会话：{state.sourceTitle}</span>}
+      </aside>}
       <div className="overlay-actions">{state.sessionActive ? <><button className="danger" onClick={() => sendCommand("stop")}>结束会话</button><button className="primary" disabled={submitDisabled} onClick={() => sendCommand("submit")}>提交当前问题</button></> : <button className="primary" disabled={testMode === "all" ? !state.llmReady || !state.asrReady : testMode === "asr" ? !state.asrReady : !state.llmReady} onClick={() => sendCommand("start")}>启动测试</button>}<span>{copyNotice || state.notice}</span></div>
       <div className="overlay-field-heading"><strong>当前问题</strong><small>{state.sessionMode === "answer" ? "可直接输入并提交" : "可编辑转写文本"}</small></div>
       <textarea className="overlay-question" value={questionDraft} onChange={(event) => changeQuestion(event.target.value)} placeholder="输入或等待当前面试问题…" />
-      <div className="overlay-partial"><span>实时增量转写</span><p>{state.partial || "等待系统音频…"}</p></div>
-      <div className="overlay-answer-head"><strong>回答</strong><span className={`overlay-answer-status ${state.answerStatus}`}>{answerLabel}</span></div>
-      <article className="overlay-answer">{state.answer || "回答生成后会在这里显示。"}</article>
-      <div className="overlay-footer"><button onClick={() => void copyAnswer()} disabled={!state.answer}>复制回答</button><span>主窗口与悬浮窗共享同一场面试上下文</span></div>
+      {showTranscript && <div className="overlay-transcript-block"><div className="overlay-partial" onWheel={(event) => { if (!state.wheelScroll.transcript) event.preventDefault(); }}><span>实时增量转写</span><p>{state.partial || "等待系统音频…"}</p></div></div>}
+      {showAnswer && <><div className="overlay-answer-head"><strong>回答</strong><span className={"overlay-answer-status " + state.answerStatus}>{answerLabel}</span></div><article ref={answerRef} className="overlay-answer" onWheel={(event) => { if (!state.wheelScroll.answer) event.preventDefault(); }}>{state.answer || "回答生成后会在这里显示。"}</article></>}
+      {!compact && <div className="overlay-footer"><button onClick={() => void copyAnswer()} disabled={!state.answer}>复制回答</button><span>主窗口与悬浮窗共享同一场面试上下文</span></div>}
     </section>
   </main>;
 }
-
 function App() {
   const desktopRuntime = isTauri();
   const isOverlayWindow = new URLSearchParams(window.location.search).get("overlay") === "1";
@@ -220,6 +271,8 @@ function App() {
   const [debug, setDebug] = useState<string[]>([]);
   const [turnCount, setTurnCount] = useState(0);
   const [activeSessionTitle, setActiveSessionTitle] = useState("");
+  const [activeSessionSourceTitle, setActiveSessionSourceTitle] = useState("");
+  const [activeSessionCarriedTurnCount, setActiveSessionCarriedTurnCount] = useState(0);
   const [selectedHistorySessionId, setSelectedHistorySessionId] = useState<string | undefined>();
   const [profileTests, setProfileTests] = useState<Record<string, ProfileTestState>>({});
   const [profileModelStates, setProfileModelStates] = useState<Record<string, ProfileModelState>>({});
@@ -235,6 +288,9 @@ function App() {
   const questionRef = useRef("");
   const testModeRef = useRef<TestMode>("all");
   const overlayStateRef = useRef<OverlayState>(DEFAULT_OVERLAY_STATE);
+  const overlayBoundWindowRef = useRef<WebviewWindow | null>(null);
+  const overlayUnlistenRef = useRef<Array<() => void>>([]);
+  const overlayStatePersistTimerRef = useRef<number | undefined>(undefined);
   const overlayActionsRef = useRef<{ start: (mode: TestMode) => void; submit: () => void; stop: () => void }>({ start: () => {}, submit: () => {}, stop: () => {} });
   const interviewTurnsRef = useRef<InterviewTurn[]>([]);
   const activeSessionIdRef = useRef("");
@@ -244,9 +300,48 @@ function App() {
   const llmReady = Boolean(activeProfile?.baseUrl.trim() && activeProfile?.model.trim() && activeProfile && (!providerRequiresKey(activeProfile) || activeProfile.apiKey.trim()));
   const asrReady = asrConfigReady(settings.asr);
   const hasMaterials = Boolean(materials.resume.trim() || materials.jobDescription.trim() || materials.personalNotes.trim() || materials.candidateSummary.trim() || materials.jobSummary.trim() || materials.repository?.summary.trim());
+  const overlayMaterialsLabel = materials.confirmed ? "已确认并用于回答" : hasMaterials ? "有材料，等待确认" : "未添加材料";
   const sessionStage: SessionStage = answerStatus === "generating" ? "answering" : answerStatus === "complete" ? "complete" : !sessionActive ? "idle" : sessionMode === "answer" ? "manual" : asrStatus === "finalizing" ? "finalizing" : "listening";
   const statusLabel = sessionStage === "manual" ? "等待输入" : sessionStage === "answering" ? "正在生成回答" : sessionStage === "complete" ? sessionMode === "asr" ? "转写已完成" : "回答已完成" : sessionStage === "listening" ? "正在聆听" : sessionStage === "finalizing" ? "正在提交问题" : sessionStage === "idle" && !llmReady && testMode !== "asr" ? "待配置模型" : sessionStage === "idle" ? "未开始" : "连接异常";
   testModeRef.current = testMode;
+
+  function queueOverlayWindowState(patch: Partial<OverlaySettings>) {
+    if (overlayStatePersistTimerRef.current) window.clearTimeout(overlayStatePersistTimerRef.current);
+    overlayStatePersistTimerRef.current = window.setTimeout(() => {
+      setSettings((state) => ({ ...state, overlay: { ...state.overlay, ...patch } }));
+    }, 140);
+  }
+  async function applyOverlayWindowSettings(windowRef: WebviewWindow, overlay: OverlaySettings) {
+    const operations: Promise<void>[] = [windowRef.setAlwaysOnTop(overlay.alwaysOnTop), windowRef.setIgnoreCursorEvents(overlay.clickThrough)];
+    if (overlay.position) operations.push(windowRef.setPosition(new LogicalPosition(overlay.position.x, overlay.position.y)));
+    if (overlay.size) operations.push(windowRef.setSize(new LogicalSize(overlay.size.width, overlay.size.height)));
+    await Promise.allSettled(operations);
+  }
+  async function bindOverlayWindow(windowRef: WebviewWindow) {
+    if (overlayBoundWindowRef.current === windowRef) return;
+    overlayUnlistenRef.current.forEach((cleanup) => cleanup());
+    overlayUnlistenRef.current = [];
+    overlayBoundWindowRef.current = windowRef;
+    const [unlistenMoved, unlistenResized, unlistenClose] = await Promise.all([
+      windowRef.onMoved(async ({ payload }) => {
+        const scale = await windowRef.scaleFactor().catch(() => 1);
+        const logical = payload.toLogical(scale);
+        queueOverlayWindowState({ position: { x: logical.x, y: logical.y } });
+      }),
+      windowRef.onResized(async ({ payload }) => {
+        const scale = await windowRef.scaleFactor().catch(() => 1);
+        const logical = payload.toLogical(scale);
+        queueOverlayWindowState({ size: { width: Math.max(360, logical.width), height: Math.max(280, logical.height) } });
+      }),
+      windowRef.onCloseRequested(() => {
+        overlayBoundWindowRef.current = null;
+        unlistenMoved();
+        unlistenResized();
+        overlayUnlistenRef.current = [];
+      }),
+    ]);
+    overlayUnlistenRef.current = [unlistenMoved, unlistenResized, unlistenClose];
+  }
 
   useEffect(() => {
     if (!desktopRuntime || isOverlayWindow) return;
@@ -327,10 +422,16 @@ function App() {
       sessionTitle: activeSessionTitle,
       llmReady,
       asrReady,
+      overlaySettings: settings.overlay,
+      wheelScroll: settings.wheelScroll,
+      interviewFocus: INTERVIEW_FOCUS_LABELS[settings.interviewFocus],
+      materialsLabel: overlayMaterialsLabel,
+      carriedTurnCount: activeSessionCarriedTurnCount,
+      sourceTitle: activeSessionSourceTitle,
     };
     overlayStateRef.current = state;
     void emitTo("answer-overlay", "overlay-state", state).catch(() => undefined);
-  }, [desktopRuntime, isOverlayWindow, answer, question, partial, sessionActive, sessionMode, testMode, answerStatus, asrStatus, turnCount, notice, statusLabel, activeSessionTitle, llmReady, asrReady]);
+  }, [desktopRuntime, isOverlayWindow, answer, question, partial, sessionActive, sessionMode, testMode, answerStatus, asrStatus, turnCount, notice, statusLabel, activeSessionTitle, activeSessionCarriedTurnCount, activeSessionSourceTitle, llmReady, asrReady, settings.overlay, settings.wheelScroll, settings.interviewFocus, overlayMaterialsLabel]);
   useEffect(() => {
     if (!desktopRuntime || isOverlayWindow) return;
     let unlisten: () => void = () => {};
@@ -339,6 +440,20 @@ function App() {
     }).then((cleanup) => { unlisten = cleanup; });
     return () => unlisten();
   }, [desktopRuntime, isOverlayWindow]);
+  useEffect(() => {
+    if (!desktopRuntime || isOverlayWindow) return;
+    let unlisten: () => void = () => {};
+    void listen<Partial<OverlaySettings>>("overlay-settings", (event) => {
+      const next = { ...settings.overlay, ...event.payload };
+      setSettings((state) => ({ ...state, overlay: next }));
+      void WebviewWindow.getByLabel("answer-overlay").then((windowRef) => windowRef ? applyOverlayWindowSettings(windowRef, next) : undefined);
+    }).then((cleanup) => { unlisten = cleanup; });
+    return () => unlisten();
+  }, [desktopRuntime, isOverlayWindow, settings.overlay]);
+  useEffect(() => {
+    if (!desktopRuntime || isOverlayWindow) return;
+    void WebviewWindow.getByLabel("answer-overlay").then((windowRef) => windowRef ? applyOverlayWindowSettings(windowRef, settings.overlay) : undefined);
+  }, [desktopRuntime, isOverlayWindow, settings.overlay]);
 
   function updateAsrProfile<K extends keyof AppSettings["asr"]>(preset: AsrPreset, key: K, value: AppSettings["asr"][K]) {
     setSettings((state) => {
@@ -463,6 +578,7 @@ function App() {
   function beginInterview() {
     const now = new Date().toISOString();
     const carriedTurns = loadedContextRef.current;
+    const sourceTitle = loadedSourceSessionIdRef.current ? history.find((session) => session.id === loadedSourceSessionIdRef.current)?.title || "" : "";
     const title = settings.sessionTitleDraft.trim() || `面试 ${new Date(now).toLocaleString()}`;
     const session: InterviewSession = {
       id: crypto.randomUUID(),
@@ -477,6 +593,8 @@ function App() {
     };
     activeSessionIdRef.current = session.id;
     setActiveSessionTitle(title);
+    setActiveSessionSourceTitle(sourceTitle);
+    setActiveSessionCarriedTurnCount(carriedTurns.length);
     interviewTurnsRef.current = carriedTurns;
     loadedContextRef.current = [];
     loadedSourceSessionIdRef.current = undefined;
@@ -589,6 +707,8 @@ function App() {
     if (desktopRuntime && wasAsrSession) await invoke("stop_system_audio_capture").catch(() => undefined);
     setSessionActive(false); setSessionMode("idle"); setAsrStatus("idle"); setPartial(""); pendingRef.current = false;
     setActiveSessionTitle("");
+    setActiveSessionSourceTitle("");
+    setActiveSessionCarriedTurnCount(0);
     setNotice("会话已结束，仅保留文本记录。");
   }
   async function submitQuestion() {
@@ -658,12 +778,31 @@ function App() {
     overlayStateRef.current = snapshot;
     const windowRef = await WebviewWindow.getByLabel("answer-overlay");
     if (windowRef) {
+      await bindOverlayWindow(windowRef);
+      await applyOverlayWindowSettings(windowRef, settings.overlay);
       await windowRef.show();
       await windowRef.setFocus();
       await emitTo("answer-overlay", "overlay-state", snapshot).catch(() => undefined);
       return;
     }
-    new WebviewWindow("answer-overlay", { url: "/?overlay=1", title: "实时回答", width: 520, height: 440, alwaysOnTop: true, decorations: false });
+    const size = settings.overlay.size ?? { width: 520, height: 440 };
+    const windowRefNew = new WebviewWindow("answer-overlay", {
+      url: "/?overlay=1",
+      title: "实时回答",
+      width: size.width,
+      height: size.height,
+      ...(settings.overlay.position ? { x: settings.overlay.position.x, y: settings.overlay.position.y } : {}),
+      minWidth: 360,
+      minHeight: 280,
+      alwaysOnTop: settings.overlay.alwaysOnTop,
+      decorations: false,
+      resizable: true,
+      skipTaskbar: true,
+      visible: false,
+    });
+    await bindOverlayWindow(windowRefNew);
+    await applyOverlayWindowSettings(windowRefNew, settings.overlay);
+    await windowRefNew.show();
     window.setTimeout(() => void emitTo("answer-overlay", "overlay-state", snapshot).catch(() => undefined), 350);
   }
   function importMaterial(kind: "resume" | "jobDescription") {
@@ -765,6 +904,7 @@ function App() {
         <LlmProviderPanel settings={settings} setSettings={setSettings} profileTests={profileTests} profileModelStates={profileModelStates} profileQuery={profileQuery} profileSort={profileSort} expandedProfileIds={expandedProfileIds} setProfileQuery={setProfileQuery} setProfileSort={setProfileSort} onToggleExpanded={toggleProfileExpanded} onAddPreset={addProfileFromPreset} onApplyPreset={applyProfilePreset} onDuplicate={duplicateProfile} onRemove={removeProfile} onMove={moveProfile} onTest={testProfile} onLoadModels={loadProfileModels} onSave={saveConfiguration} />
         <div className="panel"><div className="panel-head"><div><h2>回答策略</h2><p>决定模型在技术问题中优先强调的表达维度。</p></div></div><div className="form-grid"><Field label="面试方向" value={settings.interviewFocus} onChange={(value) => setSettings((state) => ({ ...state, interviewFocus: value as InterviewFocus }))} select={Object.entries(INTERVIEW_FOCUS_LABELS)} /></div></div>
         <div className="panel"><div className="panel-head"><div><h2>全局快捷键</h2><p>关闭后不会注册或响应该快捷键。</p></div><label className="checkbox shortcut-toggle"><input type="checkbox" checked={settings.shortcutEnabled} onChange={(event) => setSettings((state) => ({ ...state, shortcutEnabled: event.target.checked }))} />启用快捷键</label></div><div className="shortcut-field"><span>快捷键</span><ShortcutRecorder value={settings.shortcut} onChange={(value) => setSettings((state) => ({ ...state, shortcut: value }))} /></div></div>
+        <OverlaySettingsPanel settings={settings.overlay} onChange={(patch) => setSettings((state) => ({ ...state, overlay: { ...state.overlay, ...patch } }))} />
         <div className="panel"><div className="panel-head"><div><h2>界面行为</h2><p>分别控制转写区和回答区是否响应鼠标滚轮。</p></div></div><div className="settings-toggle-grid"><label className="checkbox"><input type="checkbox" checked={settings.wheelScroll.transcript} onChange={(event) => setSettings((state) => ({ ...state, wheelScroll: { ...state.wheelScroll, transcript: event.target.checked } }))} />转写区允许滚轮滚动</label><label className="checkbox"><input type="checkbox" checked={settings.wheelScroll.answer} onChange={(event) => setSettings((state) => ({ ...state, wheelScroll: { ...state.wheelScroll, answer: event.target.checked } }))} />回答区允许滚轮滚动</label></div></div></section>}
       {tab === "history" && <section className="panel history-panel">{selectedHistorySessionId && history.some((session) => session.id === selectedHistorySessionId) ? (() => {
         const session = history.find((item) => item.id === selectedHistorySessionId)!;
@@ -772,6 +912,22 @@ function App() {
       })() : <><div className="panel-head"><div><h2>面试会话记录</h2><p>每次启动测试都会创建一场面试；不保存音频。</p></div><button className="danger" onClick={() => { clearHistory(); setHistory([]); setSelectedHistorySessionId(undefined); }}>清空记录</button></div>{history.length ? <div className="history-list">{history.map((session) => <button className="history-summary" key={session.id} onClick={() => setSelectedHistorySessionId(session.id)}><strong>{session.title}</strong><span>{new Date(session.updatedAt).toLocaleString()} · {session.turns.length} 轮问答{session.carriedTurnCount ? ` · 承接 ${session.carriedTurnCount} 轮` : ""}</span><small>{session.asrName} → {session.llmName}</small></button>)}</div> : <p className="empty">还没有面试会话记录。</p>}</>}</section>}
     </section>
   </main>;
+}
+
+function OverlaySettingsPanel({ settings, onChange }: { settings: OverlaySettings; onChange: (patch: Partial<OverlaySettings>) => void }) {
+  return <div className="panel overlay-settings-panel">
+    <div className="panel-head"><div><div className="panel-kicker">FLOATING INTERVIEW DESK</div><h2>悬浮面试台</h2><p>悬浮窗可独立调整布局、置顶、透明度和交互方式，位置与尺寸会自动记忆。</p></div><span className="context-state ready"><i />设置自动保存</span></div>
+    <div className="form-grid overlay-settings-grid">
+      <Field label="默认布局" value={settings.layout} onChange={(value) => onChange({ layout: value as OverlayLayout })} select={[["compact", "紧凑"], ["standard", "标准"], ["answer", "只回答"], ["transcript", "只转写"]]} />
+      <label className="field"><span>透明度 · {Math.round(settings.opacity * 100)}%</span><input type="range" min="0.55" max="1" step="0.01" value={settings.opacity} onChange={(event) => onChange({ opacity: Number(event.target.value) })} /></label>
+      <label className="field"><span>字号 · {Math.round(settings.fontScale * 100)}%</span><input type="range" min="0.8" max="1.35" step="0.05" value={settings.fontScale} onChange={(event) => onChange({ fontScale: Number(event.target.value) })} /></label>
+    </div>
+    <div className="settings-toggle-grid overlay-toggle-grid">
+      <label className="checkbox"><input type="checkbox" checked={settings.alwaysOnTop} onChange={(event) => onChange({ alwaysOnTop: event.target.checked })} />悬浮窗保持置顶</label>
+      <label className="checkbox"><input type="checkbox" checked={settings.autoFollow} onChange={(event) => onChange({ autoFollow: event.target.checked })} />回答生成时自动跟随底部</label>
+      <label className="checkbox"><input type="checkbox" checked={settings.clickThrough} onChange={(event) => onChange({ clickThrough: event.target.checked })} />点击穿透（需从主窗口关闭）</label>
+    </div>
+  </div>;
 }
 
 function AsrProviderPanel({

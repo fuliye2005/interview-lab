@@ -51,6 +51,15 @@ export const defaultSettings = (): AppSettings => ({
   interviewFocus: "technical-business",
   sessionTitleDraft: "",
   wheelScroll: { transcript: false, answer: false },
+  overlay: {
+    alwaysOnTop: true,
+    opacity: 0.96,
+    fontScale: 1,
+    layout: "standard",
+    clickThrough: false,
+    autoFollow: true,
+    size: { width: 520, height: 440 },
+  },
 });
 
 export const emptyMaterials = (): MaterialContext => ({
@@ -101,6 +110,7 @@ function normalizeSettings(stored?: Partial<AppSettings> | null): AppSettings {
   const fallback = defaultSettings();
   const source = stored ?? {};
   const storedWheelScroll = source.wheelScroll && typeof source.wheelScroll === "object" ? source.wheelScroll : {};
+  const storedOverlay = source.overlay && typeof source.overlay === "object" ? source.overlay : {};
   const llmProfiles = Array.isArray(source.llmProfiles) && source.llmProfiles.length
     ? source.llmProfiles.map((profile) => normalizeLlmProfile(profile))
     : fallback.llmProfiles;
@@ -126,11 +136,35 @@ function normalizeSettings(stored?: Partial<AppSettings> | null): AppSettings {
     interviewFocus: isInterviewFocus(source.interviewFocus) ? source.interviewFocus : fallback.interviewFocus,
     sessionTitleDraft: typeof source.sessionTitleDraft === "string" ? source.sessionTitleDraft : fallback.sessionTitleDraft,
     wheelScroll: { ...fallback.wheelScroll, ...storedWheelScroll },
+    overlay: normalizeOverlaySettings(storedOverlay, fallback.overlay),
   };
   if (!settings.llmProfiles.some((profile) => profile.id === settings.activeLlmProfileId)) {
     settings.activeLlmProfileId = settings.llmProfiles[0]?.id || "";
   }
   return settings;
+}
+
+function normalizeOverlaySettings(value: unknown, fallback: AppSettings["overlay"]): AppSettings["overlay"] {
+  const source = value && typeof value === "object" ? value as Partial<AppSettings["overlay"]> : {};
+  const position = source.position && typeof source.position === "object" && Number.isFinite(source.position.x) && Number.isFinite(source.position.y)
+    ? { x: Number(source.position.x), y: Number(source.position.y) }
+    : fallback.position;
+  const size = source.size && typeof source.size === "object" && Number.isFinite(source.size.width) && Number.isFinite(source.size.height)
+    ? { width: Math.max(360, Number(source.size.width)), height: Math.max(280, Number(source.size.height)) }
+    : fallback.size;
+  const layout = source.layout === "compact" || source.layout === "standard" || source.layout === "answer" || source.layout === "transcript" ? source.layout : fallback.layout;
+  return {
+    ...fallback,
+    ...source,
+    opacity: Number.isFinite(source.opacity) ? Math.min(1, Math.max(0.55, Number(source.opacity))) : fallback.opacity,
+    fontScale: Number.isFinite(source.fontScale) ? Math.min(1.35, Math.max(0.8, Number(source.fontScale))) : fallback.fontScale,
+    layout,
+    position,
+    size,
+    alwaysOnTop: typeof source.alwaysOnTop === "boolean" ? source.alwaysOnTop : fallback.alwaysOnTop,
+    clickThrough: typeof source.clickThrough === "boolean" ? source.clickThrough : fallback.clickThrough,
+    autoFollow: typeof source.autoFollow === "boolean" ? source.autoFollow : fallback.autoFollow,
+  };
 }
 
 function isInterviewFocus(value: unknown): value is InterviewFocus {
