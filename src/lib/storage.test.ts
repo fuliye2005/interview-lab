@@ -22,7 +22,7 @@ describe("loadHistory", () => {
 
     const sessions = loadHistory();
 
-    expect(sessions).toEqual([expect.objectContaining({ id: "turn-1", carriedTurnCount: 0, turns: [expect.objectContaining({ question: "请介绍自己" })] })]);
+    expect(sessions).toEqual([expect.objectContaining({ id: "turn-1", title: expect.stringMatching(/^历史面试 /), carriedTurnCount: 0, turns: [expect.objectContaining({ question: "请介绍自己" })] })]);
   });
 
   it("keeps session records grouped by interview", () => {
@@ -30,6 +30,12 @@ describe("loadHistory", () => {
 
     const sessions = loadHistory();
 
-    expect(sessions[0]).toMatchObject({ id: "session-1", carriedTurnCount: 2, turns: [] });
+    expect(sessions[0]).toMatchObject({ id: "session-1", title: expect.stringMatching(/^历史面试 /), carriedTurnCount: 2, turns: [] });
+  });
+
+  it("preserves manually named sessions", () => {
+    setStoredHistory([{ id: "session-2", title: "解决方案顾问一面", createdAt: "2026-08-17T08:00:00.000Z", updatedAt: "2026-08-17T08:05:00.000Z", asrName: "ASR", llmName: "LLM", carriedTurnCount: 0, turns: [] }]);
+
+    expect(loadHistory()[0]).toMatchObject({ id: "session-2", title: "解决方案顾问一面" });
   });
 });

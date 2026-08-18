@@ -75,6 +75,7 @@ export interface InterviewTurn {
 
 export interface InterviewSession {
   id: string;
+  title: string;
   createdAt: string;
   updatedAt: string;
   asrName: string;
@@ -94,6 +95,7 @@ export interface AppSettings {
   activeLlmProfileId: string;
   shortcut: string;
   interviewFocus: InterviewFocus;
+  sessionTitleDraft: string;
 }
 
 const commonAsrConfig = (): Omit<AsrProviderConfig, "name" | "preset" | "protocol" | "wsUrl" | "apiKey" | "audioMode"> => ({

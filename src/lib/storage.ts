@@ -12,6 +12,7 @@ export const defaultSettings = (): AppSettings => ({
   activeLlmProfileId: "",
   shortcut: "Ctrl+Shift+Space",
   interviewFocus: "technical-business",
+  sessionTitleDraft: "",
 });
 
 export const emptyMaterials = (): MaterialContext => ({
@@ -73,6 +74,7 @@ export function loadSettings(): AppSettings {
     asrProfiles: { ...fallback.asrProfiles, ...asrProfiles, [activePreset]: activeAsr },
     llmProfiles,
     interviewFocus: isInterviewFocus(stored.interviewFocus) ? stored.interviewFocus : fallback.interviewFocus,
+    sessionTitleDraft: typeof stored.sessionTitleDraft === "string" ? stored.sessionTitleDraft : fallback.sessionTitleDraft,
   };
   if (!settings.llmProfiles.some((profile) => profile.id === settings.activeLlmProfileId)) {
     settings.activeLlmProfileId = settings.llmProfiles[0]?.id || "";
@@ -95,10 +97,18 @@ export function loadHistory(): InterviewSession[] {
   const history = read<unknown>(HISTORY_KEY, []);
   if (!Array.isArray(history)) return [];
   return history.map((item) => {
-    if (isInterviewSession(item)) return item;
+    if (isInterviewSession(item)) {
+      return {
+        ...item,
+        title: typeof item.title === "string" && item.title.trim() ? item.title : `历史面试 ${new Date(item.createdAt).toLocaleString()}`,
+        updatedAt: item.updatedAt || item.createdAt,
+        carriedTurnCount: item.carriedTurnCount || 0,
+      };
+    }
     const record = item as SessionRecord;
     return {
       id: record.id,
+      title: `历史面试 ${new Date(record.createdAt).toLocaleString()}`,
       createdAt: record.createdAt,
       updatedAt: record.createdAt,
       asrName: record.asrName,

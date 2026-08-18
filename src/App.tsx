@@ -101,6 +101,8 @@ function App() {
   const [notice, setNotice] = useState("配置文本模型后即可开始测试；ASR 和候选人材料均可选。");
   const [debug, setDebug] = useState<string[]>([]);
   const [turnCount, setTurnCount] = useState(0);
+  const [activeSessionTitle, setActiveSessionTitle] = useState("");
+  const [selectedHistorySessionId, setSelectedHistorySessionId] = useState<string | undefined>();
   const asrRef = useRef<GenericAsrSession | undefined>(undefined);
   const pendingRef = useRef(false);
   const questionRef = useRef("");
@@ -179,8 +181,10 @@ function App() {
   function beginInterview() {
     const now = new Date().toISOString();
     const carriedTurns = loadedContextRef.current;
+    const title = settings.sessionTitleDraft.trim() || `面试 ${new Date(now).toLocaleString()}`;
     const session: InterviewSession = {
       id: crypto.randomUUID(),
+      title,
       createdAt: now,
       updatedAt: now,
       asrName: settings.asr.name,
@@ -190,11 +194,13 @@ function App() {
       turns: [],
     };
     activeSessionIdRef.current = session.id;
+    setActiveSessionTitle(title);
     interviewTurnsRef.current = carriedTurns;
     loadedContextRef.current = [];
     loadedSourceSessionIdRef.current = undefined;
     setTurnCount(carriedTurns.length);
     setHistory((items) => [session, ...items]);
+    setSettings((state) => ({ ...state, sessionTitleDraft: "" }));
   }
   function appendSessionRecord(record: SessionRecord) {
     const sessionId = activeSessionIdRef.current;
@@ -211,8 +217,12 @@ function App() {
     setQuestion("");
     setAnswer("");
     setAnswerStatus("idle");
+    setSettings((state) => ({ ...state, sessionTitleDraft: `${session.title} · 下一轮` }));
     setTab("session");
     setNotice(`已载入 ${turns.length} 轮历史问答；点击“启动测试”后会创建下一轮面试记录并延续这些上下文。`);
+  }
+  function renameHistorySession(sessionId: string, title: string) {
+    setHistory((items) => items.map((session) => session.id === sessionId ? { ...session, title, updatedAt: new Date().toISOString() } : session));
   }
 
   async function startSession(mode: Exclude<TestMode, "answer">) {
@@ -383,8 +393,9 @@ function App() {
       {tab === "session" && <section className="session-grid">
         <div className="panel session-panel">
           <div className="panel-head session-head"><div><div className="panel-kicker">LIVE SESSION</div><h2>系统音频会话</h2><p>默认输出设备 · PCM16 / Mono / 16kHz</p></div><span className={`session-badge ${sessionStage}`}><i />{statusLabel}</span></div>
-          <div className="interview-context">本次面试上下文：已完成 {turnCount} 轮问答</div>
+          <div className="interview-context">本次面试上下文：已完成 {turnCount} 轮问答{sessionActive && activeSessionTitle ? ` · ${activeSessionTitle}` : ""}</div>
           <SessionProgress stage={sessionStage} mode={sessionMode === "idle" ? testMode : sessionMode} />
+          {!sessionActive && <label className="session-title-draft"><span>本次会话主题</span><input value={settings.sessionTitleDraft} onChange={(event) => setSettings((state) => ({ ...state, sessionTitleDraft: event.target.value }))} placeholder="例如：售前解决方案岗位一面" /></label>}
           <div className="session-actions"><div className="button-row">{sessionActive ? <button className="danger" onClick={() => void stopSession()}>结束会话</button> : <><button className="primary" onClick={startTest}>启动测试</button><label className="test-mode"><span>测试内容</span><select value={testMode} onChange={(event) => setTestMode(event.target.value as TestMode)}><option value="all">全部启动</option><option value="asr">语音转文字</option><option value="answer">问题回答</option></select></label></>}{sessionActive && sessionMode !== "answer" && <button className="primary submit-button" onClick={() => void submitQuestion()}>提交当前问题</button>}</div><span className="action-hint">{testMode === "asr" && !asrReady ? "先在服务配置中填写 ASR 凭证" : testMode === "answer" && !llmReady ? "先在服务配置中填写文本模型" : testMode === "all" && (!llmReady || !asrReady) ? "全部启动需要同时配置 ASR 与文本模型" : sessionStage === "listening" ? `听到问题后按 ${settings.shortcut} 提交` : sessionStage === "finalizing" ? "正在等待最终转写文本" : sessionStage === "answering" ? "回答会同步显示在右侧" : testMode === "asr" ? "单独验证实时语音转文字" : testMode === "answer" ? "直接输入问题验证回答效果" : "同时验证转写与问题回答"}</span></div>
           <div className="shortcut"><span>全局快捷键</span><kbd>{settings.shortcut}</kbd><span>· 仅在语音转文字或全部启动时用于提交当前语音段</span></div>
           <div className="field-heading"><label>实时增量转写</label><span className={asrStatus === "listening" ? "live-dot" : ""}>{asrStatus === "listening" ? "正在接收" : "等待开始"}</span></div>
@@ -404,7 +415,10 @@ function App() {
         <div className="panel"><div className="panel-head"><div><h2>文本模型 Profiles</h2><p>Base URL、Key、协议与上下文窗口都按模型单独保存。</p></div><button onClick={() => { const profile = createDefaultLlmProfile(); setSettings((state) => ({ ...state, llmProfiles: [...state.llmProfiles, profile], activeLlmProfileId: profile.id })); }}>添加模型</button></div>{settings.llmProfiles.map((profile) => <div key={profile.id} className="profile"><div className="profile-title"><label className="radio"><input type="radio" checked={profile.id === settings.activeLlmProfileId} onChange={() => setSettings((state) => ({ ...state, activeLlmProfileId: profile.id }))} />用作当前模型</label><button className="link danger-text" disabled={settings.llmProfiles.length === 1} onClick={() => setSettings((state) => ({ ...state, llmProfiles: state.llmProfiles.filter((item) => item.id !== profile.id), activeLlmProfileId: state.llmProfiles.find((item) => item.id !== profile.id)?.id || "" }))}>删除</button></div><div className="form-grid"><Field label="名称" value={profile.name} onChange={(value) => updateProfile(profile.id, "name", value)} /><Field label="模型" value={profile.model} onChange={(value) => updateProfile(profile.id, "model", value)} /><Field label="Base URL" value={profile.baseUrl} onChange={(value) => updateProfile(profile.id, "baseUrl", value)} placeholder="https://…/v1" /><Field label="Key" value={profile.apiKey} type="password" onChange={(value) => updateProfile(profile.id, "apiKey", value)} /><Field label="上游协议" value={profile.protocol} onChange={(value) => updateProfile(profile.id, "protocol", value as LlmProfile["protocol"])} select={[["responses", "Responses API"], ["chat-completions", "Chat Completions"]]} /><Field label="自定义路径（可选）" value={profile.requestPath || ""} onChange={(value) => updateProfile(profile.id, "requestPath", value)} /><ContextWindowField value={profile.contextWindow || 8000} onChange={(value) => updateProfile(profile.id, "contextWindow", value)} /><Field label="回答精细程度" value={profile.answerDetail || "balanced"} onChange={(value) => updateProfile(profile.id, "answerDetail", value as LlmProfile["answerDetail"])} select={[["concise", "简洁"], ["balanced", "标准"], ["detailed", "详细"]]} /><Field label="思考深度" value={profile.reasoningEffort || "none"} onChange={(value) => updateProfile(profile.id, "reasoningEffort", value as LlmProfile["reasoningEffort"])} select={[["none", "不指定"], ["low", "低"], ["medium", "中"], ["high", "高"]]} /></div><label>额外请求头 JSON</label><textarea rows={2} value={profile.extraHeaders} onChange={(event) => updateProfile(profile.id, "extraHeaders", event.target.value)} /><div className="config-preview"><div><strong>config.toml 预览</strong><span>Key 不会在此显示</span></div><textarea readOnly rows={8} value={profileConfigPreview(profile, settings.interviewFocus)} /></div></div>)}</div>
         <div className="panel"><div className="panel-head"><div><h2>回答策略</h2><p>决定模型在技术问题中优先强调的表达维度。</p></div></div><div className="form-grid"><Field label="面试方向" value={settings.interviewFocus} onChange={(value) => setSettings((state) => ({ ...state, interviewFocus: value as InterviewFocus }))} select={Object.entries(INTERVIEW_FOCUS_LABELS)} /></div></div>
         <div className="panel"><h2>全局快捷键</h2><div className="shortcut-field"><span>快捷键</span><ShortcutRecorder value={settings.shortcut} onChange={(value) => setSettings((state) => ({ ...state, shortcut: value }))} /></div></div></section>}
-      {tab === "history" && <section className="panel history-panel"><div className="panel-head"><div><h2>面试会话记录</h2><p>每次启动测试都会创建一场面试；不保存音频。</p></div><button className="danger" onClick={() => { clearHistory(); setHistory([]); }}>清空记录</button></div>{history.length ? history.map((session) => <article className="history-item" key={session.id}><div><span>{new Date(session.createdAt).toLocaleString()} · {session.turns.length} 轮问答{session.carriedTurnCount ? ` · 承接 ${session.carriedTurnCount} 轮上下文` : ""}</span><button className="text-button" disabled={sessionActive} onClick={() => loadSessionContext(session)}>载入为下一轮上下文</button></div><strong>{session.asrName} → {session.llmName}</strong>{session.turns.length ? session.turns.map((turn) => <div className="history-turn" key={turn.id}><h3>{turn.question}</h3>{turn.error ? <p className="error">{turn.error}</p> : <p>{turn.answer}</p>}</div>) : <p className="empty-session">本次测试尚未提交问题。</p>}</article>) : <p className="empty">还没有面试会话记录。</p>}</section>}
+      {tab === "history" && <section className="panel history-panel">{selectedHistorySessionId && history.some((session) => session.id === selectedHistorySessionId) ? (() => {
+        const session = history.find((item) => item.id === selectedHistorySessionId)!;
+        return <div className="history-detail"><div className="panel-head history-detail-header"><div><button className="text-button history-back" onClick={() => setSelectedHistorySessionId(undefined)}>返回会话列表</button><h2>会话详情</h2><p>完整问答仅在详情页显示；修改主题会自动保存。</p></div><button className="primary" disabled={sessionActive} onClick={() => loadSessionContext(session)}>载入为下一轮上下文</button></div><label className="history-session-title-editor"><span>会话主题</span><input value={session.title} onChange={(event) => renameHistorySession(session.id, event.target.value)} placeholder="输入这场面试的主题" /></label><div className="history-meta"><span>创建于 {new Date(session.createdAt).toLocaleString()}</span><span>更新于 {new Date(session.updatedAt).toLocaleString()}</span><span>{session.turns.length} 轮问答</span>{session.carriedTurnCount > 0 && <span>承接 {session.carriedTurnCount} 轮上下文</span>}<span>{session.asrName} → {session.llmName}</span></div>{session.turns.length ? <div className="history-turn-list">{session.turns.map((turn) => <article className="history-turn" key={turn.id}><div className="history-turn-time">{new Date(turn.createdAt).toLocaleString()}</div><h3>{turn.question}</h3>{turn.error ? <p className="error">{turn.error}</p> : <p>{turn.answer}</p>}</article>)}</div> : <p className="empty-session">本次测试尚未提交问题。</p>}</div>;
+      })() : <><div className="panel-head"><div><h2>面试会话记录</h2><p>每次启动测试都会创建一场面试；不保存音频。</p></div><button className="danger" onClick={() => { clearHistory(); setHistory([]); setSelectedHistorySessionId(undefined); }}>清空记录</button></div>{history.length ? <div className="history-list">{history.map((session) => <button className="history-summary" key={session.id} onClick={() => setSelectedHistorySessionId(session.id)}><strong>{session.title}</strong><span>{new Date(session.updatedAt).toLocaleString()} · {session.turns.length} 轮问答{session.carriedTurnCount ? ` · 承接 ${session.carriedTurnCount} 轮` : ""}</span><small>{session.asrName} → {session.llmName}</small></button>)}</div> : <p className="empty">还没有面试会话记录。</p>}</>}</section>}
     </section>
   </main>;
 }
