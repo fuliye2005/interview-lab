@@ -5,13 +5,14 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { GenericAsrSession } from "./lib/asr";
+import { ASR_PROVIDER_PRESETS, asrConfigPreview, asrConfigReady, asrMissingFields, asrProviderLabel, classifyAsrError, testAsrConnection, testAsrFinalText } from "./lib/asr-providers";
 import { buildInterviewPrompt, listLlmModels, sanitizeAnswerText, streamLlm, testLlmConnection } from "./lib/llm";
 import { extractMaterialText, makeCandidateDraft, makeJobDraft } from "./lib/materials";
 import { applyLlmProviderPreset, LLM_PROVIDER_PRESETS, providerLabel, providerRequiresKey } from "./lib/providers";
 import { importRepository as importRepositoryMaterial } from "./lib/repository";
 import { formatShortcut, shortcutKeyToken, toGlobalShortcut } from "./lib/shortcut";
 import { clearHistory, defaultSettings, emptyMaterials, initializeStorage, loadHistory, loadMaterials, loadSettings, saveHistory, saveMaterials, saveSettings } from "./lib/storage";
-import type { AnswerStatus, AppSettings, AsrPreset, AsrStatus, InterviewFocus, InterviewSession, InterviewTurn, LlmProfile, LlmProviderPresetId, MaterialContext, SessionRecord } from "./types";
+import type { AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, InterviewFocus, InterviewSession, InterviewTurn, LlmProfile, LlmProviderPresetId, MaterialContext, SessionRecord } from "./types";
 import { createAsrPreset, createDefaultLlmProfile, INTERVIEW_FOCUS_LABELS } from "./types";
 import "./App.css";
 import "./theme.css";
@@ -23,6 +24,7 @@ type SessionStage = "idle" | "manual" | "listening" | "finalizing" | "answering"
 type ProfileTestState = { status: "idle" | "testing" | "success" | "error"; latencyMs?: number; firstTokenMs?: number; message?: string };
 type ProfileSort = "active" | "name" | "updated";
 type ProfileModelState = { status: "idle" | "loading" | "success" | "error"; models: string[]; message?: string };
+type AsrProfileTestState = { status: "idle" | "testing" | "success" | "error"; mode?: "connection" | "final"; latencyMs?: number; finalText?: string; errorKind?: string; message?: string };
 type OverlayCommand = { command: "start" | "submit" | "stop" | "hide"; testMode?: TestMode };
 type OverlayState = {
   answer: string;
@@ -221,6 +223,8 @@ function App() {
   const [selectedHistorySessionId, setSelectedHistorySessionId] = useState<string | undefined>();
   const [profileTests, setProfileTests] = useState<Record<string, ProfileTestState>>({});
   const [profileModelStates, setProfileModelStates] = useState<Record<string, ProfileModelState>>({});
+  const [asrProfileTests, setAsrProfileTests] = useState<Record<string, AsrProfileTestState>>({});
+  const [expandedAsrPresetIds, setExpandedAsrPresetIds] = useState<AsrPreset[]>([]);
   const [profileQuery, setProfileQuery] = useState("");
   const [profileSort, setProfileSort] = useState<ProfileSort>("active");
   const [expandedProfileIds, setExpandedProfileIds] = useState<string[]>([]);
@@ -238,7 +242,7 @@ function App() {
   const loadedSourceSessionIdRef = useRef<string | undefined>(undefined);
   const activeProfile = useMemo(() => settings.llmProfiles.find((item) => item.id === settings.activeLlmProfileId) ?? settings.llmProfiles[0], [settings]);
   const llmReady = Boolean(activeProfile?.baseUrl.trim() && activeProfile?.model.trim() && activeProfile && (!providerRequiresKey(activeProfile) || activeProfile.apiKey.trim()));
-  const asrReady = Boolean(settings.asr.wsUrl.trim() && settings.asr.apiKey.trim() && (settings.asr.protocol !== "aliyun-nls" || settings.asr.appKey?.trim()));
+  const asrReady = asrConfigReady(settings.asr);
   const hasMaterials = Boolean(materials.resume.trim() || materials.jobDescription.trim() || materials.personalNotes.trim() || materials.candidateSummary.trim() || materials.jobSummary.trim() || materials.repository?.summary.trim());
   const sessionStage: SessionStage = answerStatus === "generating" ? "answering" : answerStatus === "complete" ? "complete" : !sessionActive ? "idle" : sessionMode === "answer" ? "manual" : asrStatus === "finalizing" ? "finalizing" : "listening";
   const statusLabel = sessionStage === "manual" ? "等待输入" : sessionStage === "answering" ? "正在生成回答" : sessionStage === "complete" ? sessionMode === "asr" ? "转写已完成" : "回答已完成" : sessionStage === "listening" ? "正在聆听" : sessionStage === "finalizing" ? "正在提交问题" : sessionStage === "idle" && !llmReady && testMode !== "asr" ? "待配置模型" : sessionStage === "idle" ? "未开始" : "连接异常";
@@ -336,11 +340,14 @@ function App() {
     return () => unlisten();
   }, [desktopRuntime, isOverlayWindow]);
 
-  function updateAsr<K extends keyof AppSettings["asr"]>(key: K, value: AppSettings["asr"][K]) {
+  function updateAsrProfile<K extends keyof AppSettings["asr"]>(preset: AsrPreset, key: K, value: AppSettings["asr"][K]) {
     setSettings((state) => {
-      const asr = { ...state.asr, [key]: value };
-      const preset = asr.preset ?? "generic";
-      return { ...state, asr, asrProfiles: { ...state.asrProfiles, [preset]: asr } };
+      const profile = { ...(state.asrProfiles[preset] ?? createAsrPreset(preset)), [key]: value };
+      return {
+        ...state,
+        asr: state.asr.preset === preset ? profile : state.asr,
+        asrProfiles: { ...state.asrProfiles, [preset]: profile },
+      };
     });
   }
   function selectAsrPreset(preset: AsrPreset) {
@@ -354,6 +361,28 @@ function App() {
   function saveConfiguration() {
     saveSettings(settings);
     setNotice("服务配置已保存到本机。");
+  }
+  function toggleAsrPresetExpanded(preset: AsrPreset) {
+    setExpandedAsrPresetIds((ids) => ids.includes(preset) ? ids.filter((id) => id !== preset) : [...ids, preset]);
+  }
+  async function testAsrProfile(preset: AsrPreset, mode: "connection" | "final") {
+    const profile = settings.asrProfiles[preset] ?? createAsrPreset(preset);
+    const missing = asrMissingFields(profile);
+    if (missing.length) {
+      setAsrProfileTests((state) => ({ ...state, [preset]: { status: "error", mode, errorKind: "配置不完整", message: `请先填写：${missing.join("、")}` } }));
+      setNotice(`${asrProviderLabel(profile)}：请先填写 ${missing.join("、")}。`);
+      return;
+    }
+    setAsrProfileTests((state) => ({ ...state, [preset]: { status: "testing", mode } }));
+    try {
+      const result = mode === "connection" ? await testAsrConnection(profile) : await testAsrFinalText(profile);
+      setAsrProfileTests((state) => ({ ...state, [preset]: { status: "success", mode, latencyMs: result.latencyMs, finalText: result.finalText } }));
+      setNotice(mode === "connection" ? `${profile.name} 连接成功，延迟 ${result.latencyMs} ms。` : `${profile.name} 收到最终文本事件：${result.finalText || "（空文本）"}`);
+    } catch (error) {
+      const classified = classifyAsrError(error);
+      setAsrProfileTests((state) => ({ ...state, [preset]: { status: "error", mode, errorKind: classified.label, message: classified.message } }));
+      setNotice(`${profile.name}：${classified.label} · ${classified.message}`);
+    }
   }
   function duplicateProfile(profile: LlmProfile) {
     const copy: LlmProfile = { ...profile, id: crypto.randomUUID(), name: `${profile.name} 副本` };
@@ -543,7 +572,8 @@ function App() {
       return;
     }
     if (mode === "asr" && !asrReady) {
-      setNotice("请先在服务配置中填写 ASR 所需的 Token 和 AppKey，再测试语音转文字。");
+      const missing = asrMissingFields(settings.asr);
+      setNotice(`请先在服务配置中填写 ASR：${missing.join("、") || "WebSocket 地址"}。`);
       return;
     }
     if (mode === "answer" && !llmReady) {
@@ -731,7 +761,7 @@ function App() {
       </section>}
       {tab === "materials" && <section className="materials-grid"><div className="panel"><div className="panel-head"><div><div className="panel-kicker">CANDIDATE CONTEXT</div><h2>候选人材料</h2><p>可选：PDF、DOCX、TXT 或直接粘贴。</p></div><button onClick={() => importMaterial("resume")}>导入简历</button></div><label>简历原文</label><textarea rows={10} value={materials.resume} onChange={(event) => setMaterials((state) => ({ ...state, resume: event.target.value, confirmed: false }))} /><label>个人补充资料</label><textarea rows={5} value={materials.personalNotes} onChange={(event) => setMaterials((state) => ({ ...state, personalNotes: event.target.value, confirmed: false }))} /></div><div className="panel"><div className="panel-head"><div><div className="panel-kicker">TARGET ROLE</div><h2>目标岗位</h2><p>可选：一次会话仅使用一份 JD。</p></div><button onClick={() => importMaterial("jobDescription")}>导入 JD</button></div><label>岗位描述</label><textarea rows={10} value={materials.jobDescription} onChange={(event) => setMaterials((state) => ({ ...state, jobDescription: event.target.value, confirmed: false }))} /><button className="primary full" onClick={draftSummaries}>生成可编辑摘要草稿</button></div><div className="panel full-width context-panel"><div className="panel-head"><div><div className="panel-kicker">READY FOR LLM</div><h2>确认后的 LLM 上下文</h2><p>只有确认后的摘要才会参与回答，避免模型误用未检查的信息。</p></div><div className="context-actions"><span className={`context-state ${materialClass}`}><i />{materialLabel}</span><button className={materials.confirmed ? "success" : "primary"} onClick={() => setMaterials((state) => ({ ...state, confirmed: !state.confirmed }))}>{materials.confirmed ? "取消确认" : "确认并用于回答"}</button></div></div><div className="summary-grid"><div><label>候选人事实摘要</label><textarea rows={12} value={materials.candidateSummary} onChange={(event) => setMaterials((state) => ({ ...state, candidateSummary: event.target.value, confirmed: false }))} /></div><div><label>岗位要求摘要</label><textarea rows={12} value={materials.jobSummary} onChange={(event) => setMaterials((state) => ({ ...state, jobSummary: event.target.value, confirmed: false }))} /></div></div></div></section>}
       {tab === "materials" && <section className="panel repository-panel"><div className="panel-head"><div><div className="panel-kicker">OPEN SOURCE PROJECT</div><h2>GitHub / Gitee 仓库</h2><p>导入公开仓库的 README、目录和关键配置，用于回答项目与 Vibe Coding 经历问题。</p></div><span className={`context-state ${materials.repository?.confirmed ? "ready" : materials.repository ? "pending" : "muted"}`}><i />{materials.repository?.confirmed ? "已确认" : materials.repository ? "待确认" : "未导入"}</span></div><div className="repository-import-row"><input value={repositoryUrl} onChange={(event) => setRepositoryUrl(event.target.value)} placeholder="https://github.com/owner/repo 或 https://gitee.com/owner/repo" /><button className="primary" disabled={repositoryImporting} onClick={() => void importRepositoryContext()}>{repositoryImporting ? "导入中…" : "导入仓库"}</button></div>{materials.repository && <><div className="repository-meta"><strong>{materials.repository.name}</strong><span>{materials.repository.provider === "github" ? "GitHub" : "Gitee"} · {materials.repository.branch} · {materials.repository.fileTree.split("\n").filter(Boolean).length} 个文件</span></div><label>项目摘要（可编辑）</label><textarea rows={5} value={materials.repository.summary} onChange={(event) => setMaterials((state) => ({ ...state, repository: state.repository ? { ...state.repository, summary: event.target.value, confirmed: false } : state.repository }))} /><label>关键文件与目录（只读预览）</label><textarea className="repository-preview" readOnly rows={8} value={`${materials.repository.fileTree}\n\n${materials.repository.keyFiles}`} /><div className="context-actions repository-actions"><button className={materials.repository.confirmed ? "success" : "primary"} onClick={() => setMaterials((state) => ({ ...state, repository: state.repository ? { ...state.repository, confirmed: !state.repository.confirmed } : state.repository }))}>{materials.repository.confirmed ? "取消用于回答" : "确认并用于回答"}</button><button onClick={() => setMaterials((state) => ({ ...state, repository: undefined }))}>移除仓库</button></div></>}</section>}
-      {tab === "settings" && <section className="settings-stack"><div className="panel"><div className="panel-head"><div><h2>实时 ASR Provider</h2><p>选择预配置后，只需填写对应的 Token、AppKey 或 App ID。音频固定为 PCM 16-bit / 单声道 / 16 kHz。</p></div><button className="primary" onClick={saveConfiguration}>保存配置</button></div><div className="asr-presets" role="group" aria-label="语音识别预配置"><button className={settings.asr.preset === "aliyun-trial" ? "active" : ""} onClick={() => selectAsrPreset("aliyun-trial")}>阿里云试用</button><button className={settings.asr.preset === "aliyun-nls" ? "active" : ""} onClick={() => selectAsrPreset("aliyun-nls")}>阿里云正式</button><button className={settings.asr.preset === "volcengine-asr" ? "active" : ""} onClick={() => selectAsrPreset("volcengine-asr")}>豆包流式识别</button><button className={settings.asr.preset === "generic" ? "active" : ""} onClick={() => selectAsrPreset("generic")}>通用 WebSocket</button></div>{settings.asr.protocol === "volcengine-asr" && <p className="config-warning">豆包预配置已填入官方服务地址和 PCM 参数。该服务需要自定义二进制帧及 Authorization 请求头，当前版本暂未接入底层原生传输，不能直接开始识别。</p>}<div className="form-grid"><Field label="名称" value={settings.asr.name} onChange={(value) => updateAsr("name", value)} /><Field label="WebSocket URL" value={settings.asr.wsUrl} onChange={(value) => updateAsr("wsUrl", value)} placeholder="wss://…" /><Field label={settings.asr.protocol === "aliyun-nls" ? "阿里云临时 Token" : settings.asr.protocol === "volcengine-asr" ? "豆包 Access Token" : "API Key"} value={settings.asr.apiKey} type="password" onChange={(value) => updateAsr("apiKey", value)} />{settings.asr.protocol === "aliyun-nls" && <Field label="阿里云 AppKey" value={settings.asr.appKey || ""} onChange={(value) => updateAsr("appKey", value)} />}{settings.asr.protocol === "volcengine-asr" && <><Field label="豆包 App ID" value={settings.asr.appId || ""} onChange={(value) => updateAsr("appId", value)} /><Field label="豆包 Cluster" value={settings.asr.cluster || ""} onChange={(value) => updateAsr("cluster", value)} placeholder="控制台显示的 Cluster ID" /></>}<Field label="超时（ms）" value={String(settings.asr.timeoutMs)} onChange={(value) => updateAsr("timeoutMs", Number(value) || 10000)} /></div><details><summary>高级协议配置</summary><p className="config-note">阿里云预设默认开启中间结果、标点预测和中文数字规范化；豆包预设默认请求 ITN 与标点。多语模型均需要在各自控制台开通或配置。</p><div className="form-grid three"><Field label="音频封装" value={settings.asr.audioMode} onChange={(value) => updateAsr("audioMode", value as "binary" | "json-base64")} select={[["binary", "原始二进制 PCM"], ["json-base64", "JSON Base64"]]} /><Field label="事件路径" value={settings.asr.eventPath || ""} onChange={(value) => updateAsr("eventPath", value)} /><Field label="文本路径" value={settings.asr.textPath || ""} onChange={(value) => updateAsr("textPath", value)} /><Field label="增量事件" value={settings.asr.partialEvent || ""} onChange={(value) => updateAsr("partialEvent", value)} /><Field label="最终事件" value={settings.asr.finalEvent || ""} onChange={(value) => updateAsr("finalEvent", value)} /><Field label="错误事件" value={settings.asr.errorEvent || ""} onChange={(value) => updateAsr("errorEvent", value)} /></div><label>初始化消息 JSON</label><textarea rows={3} value={settings.asr.initMessage} onChange={(event) => updateAsr("initMessage", event.target.value)} /><label>JSON/Base64 音频模板（使用 {'{{base64}}'}）</label><textarea rows={2} value={settings.asr.audioTemplate} onChange={(event) => updateAsr("audioTemplate", event.target.value)} /><label>结束/Flush 消息 JSON</label><textarea rows={2} value={settings.asr.finalizeMessage} onChange={(event) => updateAsr("finalizeMessage", event.target.value)} /></details><label className="checkbox"><input type="checkbox" checked={settings.asr.debug} onChange={(event) => updateAsr("debug", event.target.checked)} />显示 ASR 原始消息调试日志</label></div>
+      {tab === "settings" && <section className="settings-stack"><AsrProviderPanel settings={settings} asrProfileTests={asrProfileTests} expandedPresetIds={expandedAsrPresetIds} onToggleExpanded={toggleAsrPresetExpanded} onSelect={selectAsrPreset} onUpdate={updateAsrProfile} onTest={testAsrProfile} onSave={saveConfiguration} />
         <LlmProviderPanel settings={settings} setSettings={setSettings} profileTests={profileTests} profileModelStates={profileModelStates} profileQuery={profileQuery} profileSort={profileSort} expandedProfileIds={expandedProfileIds} setProfileQuery={setProfileQuery} setProfileSort={setProfileSort} onToggleExpanded={toggleProfileExpanded} onAddPreset={addProfileFromPreset} onApplyPreset={applyProfilePreset} onDuplicate={duplicateProfile} onRemove={removeProfile} onMove={moveProfile} onTest={testProfile} onLoadModels={loadProfileModels} onSave={saveConfiguration} />
         <div className="panel"><div className="panel-head"><div><h2>回答策略</h2><p>决定模型在技术问题中优先强调的表达维度。</p></div></div><div className="form-grid"><Field label="面试方向" value={settings.interviewFocus} onChange={(value) => setSettings((state) => ({ ...state, interviewFocus: value as InterviewFocus }))} select={Object.entries(INTERVIEW_FOCUS_LABELS)} /></div></div>
         <div className="panel"><div className="panel-head"><div><h2>全局快捷键</h2><p>关闭后不会注册或响应该快捷键。</p></div><label className="checkbox shortcut-toggle"><input type="checkbox" checked={settings.shortcutEnabled} onChange={(event) => setSettings((state) => ({ ...state, shortcutEnabled: event.target.checked }))} />启用快捷键</label></div><div className="shortcut-field"><span>快捷键</span><ShortcutRecorder value={settings.shortcut} onChange={(value) => setSettings((state) => ({ ...state, shortcut: value }))} /></div></div>
@@ -742,6 +772,66 @@ function App() {
       })() : <><div className="panel-head"><div><h2>面试会话记录</h2><p>每次启动测试都会创建一场面试；不保存音频。</p></div><button className="danger" onClick={() => { clearHistory(); setHistory([]); setSelectedHistorySessionId(undefined); }}>清空记录</button></div>{history.length ? <div className="history-list">{history.map((session) => <button className="history-summary" key={session.id} onClick={() => setSelectedHistorySessionId(session.id)}><strong>{session.title}</strong><span>{new Date(session.updatedAt).toLocaleString()} · {session.turns.length} 轮问答{session.carriedTurnCount ? ` · 承接 ${session.carriedTurnCount} 轮` : ""}</span><small>{session.asrName} → {session.llmName}</small></button>)}</div> : <p className="empty">还没有面试会话记录。</p>}</>}</section>}
     </section>
   </main>;
+}
+
+function AsrProviderPanel({
+  settings,
+  asrProfileTests,
+  expandedPresetIds,
+  onToggleExpanded,
+  onSelect,
+  onUpdate,
+  onTest,
+  onSave,
+}: {
+  settings: AppSettings;
+  asrProfileTests: Record<string, AsrProfileTestState>;
+  expandedPresetIds: AsrPreset[];
+  onToggleExpanded: (preset: AsrPreset) => void;
+  onSelect: (preset: AsrPreset) => void;
+  onUpdate: <K extends keyof AsrProviderConfig>(preset: AsrPreset, key: K, value: AsrProviderConfig[K]) => void;
+  onTest: (preset: AsrPreset, mode: "connection" | "final") => void;
+  onSave: () => void;
+}) {
+  return <div className="panel provider-manager-panel asr-provider-manager">
+    <div className="panel-head provider-manager-head">
+      <div><div className="panel-kicker">ASR PROVIDERS</div><h2>实时语音 Provider</h2><p>每个 Provider 独立保存凭证、协议和高级参数；切换启用配置不会覆盖其他服务。</p></div>
+      <button className="primary" onClick={onSave}>保存配置</button>
+    </div>
+    <div className="provider-preset-strip asr-preset-strip" aria-label="语音识别预配置">
+      {ASR_PROVIDER_PRESETS.map((preset) => <button key={preset.id} title={preset.description} onClick={() => { onSelect(preset.id); onToggleExpanded(preset.id); }}><strong>{preset.label}</strong><small>{preset.credentialLabel}</small></button>)}
+    </div>
+    <div className="provider-list">
+      {ASR_PROVIDER_PRESETS.map((preset) => {
+        const profile = settings.asrProfiles[preset.id] ?? createAsrPreset(preset.id);
+        const test = asrProfileTests[preset.id] ?? { status: "idle" as const };
+        const active = settings.asr.preset === preset.id;
+        const expanded = expandedPresetIds.includes(preset.id);
+        const health = test.status === "success" ? "healthy" : test.status === "error" ? "error" : "idle";
+        const missing = asrMissingFields(profile);
+        return <article className={`provider-card asr-provider-card ${active ? "active-provider" : ""} ${expanded ? "expanded" : ""}`} key={preset.id}>
+          <div className="provider-card-head">
+            <div className="provider-card-identity"><span className={`provider-health ${health}`} /><div><strong>{profile.name || preset.label}</strong><span>{preset.protocolLabel} · {profile.audioMode === "binary" ? "PCM 二进制" : "JSON Base64"} · {profile.wsUrl || "未填写地址"}</span></div></div>
+            <div className="provider-card-actions">
+              <label className="radio provider-active-toggle"><input type="radio" checked={active} onChange={() => onSelect(preset.id)} />启用</label>
+              <button onClick={() => onToggleExpanded(preset.id)}>{expanded ? "收起" : "编辑"}</button>
+              <button onClick={() => onTest(preset.id, "connection")} disabled={test.status === "testing"}>{test.status === "testing" && test.mode === "connection" ? "连接中…" : "连接测试"}</button>
+              <button onClick={() => onTest(preset.id, "final")} disabled={test.status === "testing" || !profile.wsUrl}>{test.status === "testing" && test.mode === "final" ? "等待文本…" : "最终文本"}</button>
+            </div>
+          </div>
+          <div className="provider-card-meta"><span>{missing.length ? `待填写：${missing.join("、")}` : preset.credentialLabel}</span><span>{test.status === "success" ? `${test.mode === "final" ? "最终事件" : "可用"} · ${test.latencyMs} ms${test.finalText ? ` · ${test.finalText}` : ""}` : test.status === "error" ? `${test.errorKind || "失败"} · ${test.message || "请检查配置"}` : "尚未测试"}</span><span>{active ? "当前启用" : "未启用"}</span></div>
+          {expanded && <div className="provider-card-editor asr-provider-editor">
+            <div className="provider-editor-top"><Field label="名称" value={profile.name} onChange={(value) => onUpdate(preset.id, "name", value)} /><Field label="WebSocket URL" value={profile.wsUrl} onChange={(value) => onUpdate(preset.id, "wsUrl", value)} placeholder="wss://…" /></div>
+            <div className="form-grid"><Field label={profile.protocol === "aliyun-nls" ? "阿里云临时 Token" : profile.protocol === "volcengine-asr" ? "豆包 Access Token" : "API Key（可选）"} value={profile.apiKey} type="password" onChange={(value) => onUpdate(preset.id, "apiKey", value)} />{profile.protocol === "aliyun-nls" && <Field label="阿里云 AppKey" value={profile.appKey || ""} onChange={(value) => onUpdate(preset.id, "appKey", value)} />}{profile.protocol === "volcengine-asr" && <><Field label="豆包 App ID" value={profile.appId || ""} onChange={(value) => onUpdate(preset.id, "appId", value)} /><Field label="豆包 Cluster" value={profile.cluster || ""} onChange={(value) => onUpdate(preset.id, "cluster", value)} placeholder="控制台显示的 Cluster ID" /></>}<Field label="超时（ms）" value={String(profile.timeoutMs)} onChange={(value) => onUpdate(preset.id, "timeoutMs", Number(value) || 10000)} /></div>
+            {profile.protocol === "volcengine-asr" && <p className="config-warning">豆包需要自定义二进制协议和 Authorization 头；当前浏览器 WebSocket 适配器只保存并诊断该配置，实时会话仍请先使用阿里云或通用 WebSocket。</p>}
+            <details><summary>高级协议与稳定性</summary><p className="config-note">断线时最多重连指定次数，音频缓存有上限；最终事件会自动去重。</p><div className="form-grid three"><Field label="音频封装" value={profile.audioMode} onChange={(value) => onUpdate(preset.id, "audioMode", value as AsrProviderConfig["audioMode"])} select={[["binary", "原始二进制 PCM"], ["json-base64", "JSON Base64"]]} /><Field label="重连次数" value={String(profile.reconnectAttempts ?? 2)} onChange={(value) => onUpdate(preset.id, "reconnectAttempts", Number(value) || 0)} /><Field label="重连间隔（ms）" value={String(profile.reconnectDelayMs ?? 800)} onChange={(value) => onUpdate(preset.id, "reconnectDelayMs", Number(value) || 800)} /><Field label="音频队列上限" value={String(profile.audioQueueLimit ?? 24)} onChange={(value) => onUpdate(preset.id, "audioQueueLimit", Number(value) || 24)} /><Field label="事件路径" value={profile.eventPath || ""} onChange={(value) => onUpdate(preset.id, "eventPath", value)} /><Field label="文本路径" value={profile.textPath || ""} onChange={(value) => onUpdate(preset.id, "textPath", value)} /><Field label="增量事件" value={profile.partialEvent || ""} onChange={(value) => onUpdate(preset.id, "partialEvent", value)} /><Field label="最终事件" value={profile.finalEvent || ""} onChange={(value) => onUpdate(preset.id, "finalEvent", value)} /><Field label="错误事件" value={profile.errorEvent || ""} onChange={(value) => onUpdate(preset.id, "errorEvent", value)} /></div><label>初始化消息 JSON</label><textarea rows={3} value={profile.initMessage || ""} onChange={(event) => onUpdate(preset.id, "initMessage", event.target.value)} /><label>JSON/Base64 音频模板（使用 {'{{base64}}'}）</label><textarea rows={2} value={profile.audioTemplate || ""} onChange={(event) => onUpdate(preset.id, "audioTemplate", event.target.value)} /><label>结束 / Flush 消息 JSON</label><textarea rows={2} value={profile.finalizeMessage || ""} onChange={(event) => onUpdate(preset.id, "finalizeMessage", event.target.value)} /></details>
+            <label className="checkbox"><input type="checkbox" checked={profile.debug} onChange={(event) => onUpdate(preset.id, "debug", event.target.checked)} />显示原始消息调试日志</label>
+            <div className="config-preview"><div><strong>asr.toml 预览</strong><span>凭证默认隐藏</span></div><textarea readOnly rows={8} value={asrConfigPreview(profile)} /></div>
+          </div>}
+        </article>;
+      })}
+    </div>
+  </div>;
 }
 
 function LlmProviderPanel({

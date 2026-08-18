@@ -50,6 +50,9 @@ export interface AsrProviderConfig {
   textPath?: string;
   eventPath?: string;
   timeoutMs: number;
+  reconnectAttempts?: number;
+  reconnectDelayMs?: number;
+  audioQueueLimit?: number;
   debug: boolean;
 }
 
@@ -134,6 +137,9 @@ const commonAsrConfig = (): Omit<AsrProviderConfig, "name" | "preset" | "protoco
   eventPath: "type",
   textPath: "text",
   timeoutMs: 10000,
+  reconnectAttempts: 2,
+  reconnectDelayMs: 800,
+  audioQueueLimit: 24,
   debug: false,
 });
 

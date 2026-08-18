@@ -215,8 +215,14 @@ button { white-space: nowrap; }
 .provider-editor-top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px 12px; }
 .provider-inline-error { margin: 0; padding: 8px 10px; border: 1px solid #6e3b49; border-radius: 7px; color: #ffb4b7; background: #2a1824; font-size: 11px; }
 .provider-card-editor .config-preview { margin-top: 0; }
+.asr-provider-manager .provider-manager-head p { max-width: 660px; }
+.asr-preset-strip { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.asr-provider-card .provider-card-meta span:nth-child(2) { flex: 1 1 240px; }
+.asr-provider-editor details { margin-top: 2px; }
+.asr-provider-editor .config-warning { margin: 0; }
 @media (max-width: 1050px) {
   .provider-preset-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .asr-preset-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .provider-toolbar { grid-template-columns: minmax(0, 1fr) 150px; }
   .provider-count { grid-column: 1 / -1; padding-bottom: 0; }
 }
