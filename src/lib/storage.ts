@@ -46,6 +46,15 @@ export interface StorageDiagnostics {
   secretStore: "stronghold" | "browser-not-persisted";
   backupCount: number;
   lastBackupAt?: string;
+  uncleanExit: boolean;
+  lastStartedAt?: string;
+  lastCleanShutdownAt?: string;
+}
+
+interface RuntimeMarker {
+  state: "running" | "clean";
+  startedAt: string;
+  cleanAt?: string;
 }
 
 interface PersistentContext {
@@ -56,6 +65,7 @@ interface PersistentContext {
   secretCache: Map<string, string>;
   writeQueue: Promise<void>;
   lastBackupAt: number;
+  startup: { uncleanExit: boolean; lastStartedAt?: string; lastCleanShutdownAt?: string };
 }
 
 let contextPromise: Promise<PersistentContext> | undefined;
@@ -66,6 +76,9 @@ export const defaultSettings = (): AppSettings => ({
   llmProfiles: [createDefaultLlmProfile()],
   activeLlmProfileId: "",
   shortcut: "Ctrl+Shift+Space",
+  overlayToggleShortcut: "Ctrl+Shift+O",
+  stopGenerationShortcut: "Ctrl+Shift+X",
+  clickThroughShortcut: "Ctrl+Shift+P",
   shortcutEnabled: true,
   interviewFocus: "technical-business",
   answerFramework: "balanced",
@@ -152,6 +165,10 @@ function normalizeSettings(stored?: Partial<AppSettings> | null): AppSettings {
     asr: activeAsr,
     asrProfiles: { ...fallback.asrProfiles, ...asrProfiles, [activePreset]: activeAsr },
     llmProfiles,
+    shortcut: typeof source.shortcut === "string" && source.shortcut.trim() ? source.shortcut : fallback.shortcut,
+    overlayToggleShortcut: typeof source.overlayToggleShortcut === "string" && source.overlayToggleShortcut.trim() ? source.overlayToggleShortcut : fallback.overlayToggleShortcut,
+    stopGenerationShortcut: typeof source.stopGenerationShortcut === "string" && source.stopGenerationShortcut.trim() ? source.stopGenerationShortcut : fallback.stopGenerationShortcut,
+    clickThroughShortcut: typeof source.clickThroughShortcut === "string" && source.clickThroughShortcut.trim() ? source.clickThroughShortcut : fallback.clickThroughShortcut,
     shortcutEnabled: typeof source.shortcutEnabled === "boolean" ? source.shortcutEnabled : fallback.shortcutEnabled,
     interviewFocus: isInterviewFocus(source.interviewFocus) ? source.interviewFocus : fallback.interviewFocus,
     answerFramework: isAnswerFramework(source.answerFramework) ? source.answerFramework : fallback.answerFramework,
@@ -455,6 +472,20 @@ async function createTauriContext(): Promise<PersistentContext> {
     secretCache: new Map(),
     writeQueue: Promise.resolve(),
     lastBackupAt: 0,
+    startup: { uncleanExit: false },
+  };
+  const runtimeRows = await db.select<Array<{ payload: string }>>("SELECT payload FROM app_documents WHERE document_key = $1", ["runtime"]);
+  let previousRuntime: RuntimeMarker | undefined;
+  try {
+    previousRuntime = runtimeRows[0]?.payload ? JSON.parse(runtimeRows[0].payload) as RuntimeMarker : undefined;
+  } catch {
+    previousRuntime = undefined;
+  }
+  const startedAt = new Date().toISOString();
+  context.startup = {
+    uncleanExit: previousRuntime?.state === "running",
+    lastStartedAt: startedAt,
+    lastCleanShutdownAt: previousRuntime?.cleanAt,
   };
   const settingsRows = await db.select<Array<{ payload: string }>>("SELECT payload FROM app_documents WHERE document_key = $1", ["settings"]);
   const materialsRows = await db.select<Array<{ payload: string }>>("SELECT payload FROM app_documents WHERE document_key = $1", ["materials"]);
@@ -476,6 +507,7 @@ async function createTauriContext(): Promise<PersistentContext> {
     const storedHistory = normalizeHistory(historyRows.map((row) => JSON.parse(row.payload)));
     context.snapshot = { settings: await hydrateSecrets(context, storedSettings), materials: storedMaterials, history: storedHistory };
   }
+  await upsertDocument(context, "runtime", { state: "running", startedAt });
   return context;
 }
 
@@ -487,11 +519,11 @@ async function getTauriContext() {
 
 export async function getStorageDiagnostics(): Promise<StorageDiagnostics> {
   if (!isTauri()) {
-    return { backend: "localStorage", schemaVersion: 0, integrity: "unknown", secretStore: "browser-not-persisted", backupCount: 0 };
+    return { backend: "localStorage", schemaVersion: 0, integrity: "unknown", secretStore: "browser-not-persisted", backupCount: 0, uncleanExit: false };
   }
   try {
     const context = await getTauriContext();
-    if (!context) return { backend: "localStorage", schemaVersion: 0, integrity: "unknown", secretStore: "browser-not-persisted", backupCount: 0 };
+    if (!context) return { backend: "localStorage", schemaVersion: 0, integrity: "unknown", secretStore: "browser-not-persisted", backupCount: 0, uncleanExit: false };
     let schemaVersion = 1;
     let integrity: StorageDiagnostics["integrity"] = "unknown";
     try {
@@ -515,9 +547,12 @@ export async function getStorageDiagnostics(): Promise<StorageDiagnostics> {
       secretStore: "stronghold",
       backupCount: backups.length,
       lastBackupAt: backups[0]?.created_at,
+      uncleanExit: context.startup.uncleanExit,
+      lastStartedAt: context.startup.lastStartedAt,
+      lastCleanShutdownAt: context.startup.lastCleanShutdownAt,
     };
   } catch {
-    return { backend: "sqlite", schemaVersion: 0, integrity: "error", secretStore: "stronghold", backupCount: 0 };
+    return { backend: "sqlite", schemaVersion: 0, integrity: "error", secretStore: "stronghold", backupCount: 0, uncleanExit: false };
   }
 }
 
@@ -525,6 +560,12 @@ export async function initializeStorage(): Promise<PersistentSnapshot> {
   const context = await getTauriContext();
   if (!context) return { settings: loadSettings(), materials: loadMaterials(), history: loadHistory() };
   return context.snapshot;
+}
+
+export async function markCleanShutdown() {
+  const context = await getTauriContext();
+  if (!context) return;
+  await enqueue(context, () => upsertDocument(context, "runtime", { state: "clean", startedAt: context.startup.lastStartedAt || new Date().toISOString(), cleanAt: new Date().toISOString() })).catch(() => undefined);
 }
 
 export function saveSettings(settings: AppSettings): Promise<void> {

@@ -7,12 +7,13 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { GenericAsrSession } from "./lib/asr";
 import { ASR_PROVIDER_PRESETS, asrConfigPreview, asrConfigReady, asrMissingFields, asrProviderLabel, classifyAsrError, testAsrConnection, testAsrFinalText } from "./lib/asr-providers";
+import { BUILD_INFO } from "./lib/build-info";
 import { buildInterviewPrompt, listLlmModels, sanitizeAnswerText, selectInterviewContext, streamLlm, testLlmConnection } from "./lib/llm";
 import { extractMaterialText, makeCandidateDraft, makeJobDraft } from "./lib/materials";
 import { applyLlmProviderPreset, LLM_PROVIDER_PRESETS, providerLabel, providerRequiresKey } from "./lib/providers";
 import { importRepository as importRepositoryMaterial } from "./lib/repository";
 import { formatShortcut, shortcutKeyToken, toGlobalShortcut } from "./lib/shortcut";
-import { clearHistory, createSafeDataBundle, defaultSettings, emptyMaterials, getStorageDiagnostics, initializeStorage, loadHistory, loadMaterials, loadSettings, parseSafeDataBundle, saveHistory, saveMaterials, saveSettings } from "./lib/storage";
+import { clearHistory, createSafeDataBundle, defaultSettings, emptyMaterials, getStorageDiagnostics, initializeStorage, loadHistory, loadMaterials, loadSettings, markCleanShutdown, parseSafeDataBundle, saveHistory, saveMaterials, saveSettings } from "./lib/storage";
 import type { StorageDiagnostics } from "./lib/storage";
 import type { AnswerFramework, AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, InterviewContextTurn, InterviewFocus, InterviewSession, InterviewTurn, LlmProfile, LlmProviderPresetId, MaterialContext, OverlayLayout, OverlaySettings, SessionRecord, WheelScrollSettings } from "./types";
 import { ANSWER_FRAMEWORK_LABELS, createAsrPreset, createDefaultLlmProfile, INTERVIEW_FOCUS_LABELS } from "./types";
@@ -27,10 +28,11 @@ type ProfileTestState = { status: "idle" | "testing" | "success" | "error"; late
 type ProfileSort = "active" | "name" | "updated";
 type ProfileModelState = { status: "idle" | "loading" | "success" | "error"; models: string[]; message?: string };
 type AsrProfileTestState = { status: "idle" | "testing" | "success" | "error"; mode?: "connection" | "final"; latencyMs?: number; finalText?: string; errorKind?: string; message?: string };
-type OverlayCommand = { command: "start" | "submit" | "stop" | "hide"; testMode?: TestMode };
+type OverlayCommand = { command: "start" | "submit" | "stop" | "stop-generation" | "regenerate" | "hide"; testMode?: TestMode };
 type OverlayState = {
   answer: string;
   question: string;
+  lastQuestion: string;
   partial: string;
   sessionActive: boolean;
   sessionMode: SessionMode;
@@ -57,6 +59,7 @@ type OverlayState = {
 const DEFAULT_OVERLAY_STATE: OverlayState = {
   answer: "",
   question: "",
+  lastQuestion: "",
   partial: "",
   sessionActive: false,
   sessionMode: "idle",
@@ -231,6 +234,7 @@ function Overlay() {
   const modeLabel = testMode === "asr" ? "语音转文字" : testMode === "answer" ? "问题回答" : "全部启动";
   const answerLabel = state.answerStatus === "generating" ? "正在生成" : state.answerStatus === "complete" ? "回答完成" : state.answerStatus === "error" ? "生成失败" : "等待回答";
   const submitDisabled = !state.sessionActive || state.answerStatus === "generating" || (state.sessionMode === "answer" && !questionDraft.trim());
+  const regenerateDisabled = !state.sessionActive || state.answerStatus === "generating" || !state.lastQuestion.trim() || !state.llmReady;
   const overlayStyle = { opacity: state.overlaySettings.opacity, "--overlay-font-scale": state.overlaySettings.fontScale } as CSSProperties;
 
   return <main className={"overlay-shell overlay-layout-" + layout} style={overlayStyle}>
@@ -249,7 +253,7 @@ function Overlay() {
         <label><span>布局</span><select value={layout} onChange={(event) => changeOverlaySettings({ layout: event.target.value as OverlayLayout })}><option value="compact">紧凑</option><option value="standard">标准</option><option value="answer">只回答</option><option value="transcript">只转写</option></select></label>
         <label className="overlay-range"><span>透明度</span><input type="range" min="0.55" max="1" step="0.01" value={state.overlaySettings.opacity} onChange={(event) => changeOverlaySettings({ opacity: Number(event.target.value) })} /></label>
         <label className="overlay-range"><span>字号</span><input type="range" min="0.8" max="1.35" step="0.05" value={state.overlaySettings.fontScale} onChange={(event) => changeOverlaySettings({ fontScale: Number(event.target.value) })} /></label>
-        <button className={"overlay-toggle " + (state.overlaySettings.clickThrough ? "active" : "")} title="点击穿透需要从主窗口关闭" onClick={() => changeOverlaySettings({ clickThrough: !state.overlaySettings.clickThrough })}>{state.overlaySettings.clickThrough ? "穿透中" : "可交互"}</button>
+        <button className={"overlay-toggle " + (state.overlaySettings.clickThrough ? "active" : "")} title={state.overlaySettings.clickThrough ? "点击穿透中，可用快捷键恢复交互" : "开启点击穿透"} onClick={() => changeOverlaySettings({ clickThrough: !state.overlaySettings.clickThrough })}>{state.overlaySettings.clickThrough ? "穿透中" : "可交互"}</button>
       </div>
       {contextOpen && <aside className="overlay-context-drawer">
         <div><strong>本次上下文</strong><button className="text-button" onClick={() => setContextOpen(false)}>收起</button></div>
@@ -259,12 +263,12 @@ function Overlay() {
         <span>当前轮数：{state.turnCount} · 承接 {state.carriedTurnCount} 轮</span>
         {state.sourceTitle && <span>来源会话：{state.sourceTitle}</span>}
       </aside>}
-      <div className="overlay-actions">{state.sessionActive ? <><button className="danger" onClick={() => sendCommand("stop")}>结束会话</button><button className="primary" disabled={submitDisabled} onClick={() => sendCommand("submit")}>提交当前问题</button></> : <button className="primary" disabled={testMode === "all" ? !state.llmReady || !state.asrReady : testMode === "asr" ? !state.asrReady : !state.llmReady} onClick={() => sendCommand("start")}>启动测试</button>}<span>{copyNotice || state.notice}</span></div>
+      <div className="overlay-actions">{state.sessionActive ? <><button className="danger" onClick={() => sendCommand("stop")}>结束会话</button>{state.answerStatus === "generating" ? <button className="danger" onClick={() => sendCommand("stop-generation")}>停止生成</button> : <button className="primary" disabled={submitDisabled} onClick={() => sendCommand("submit")}>提交当前问题</button>}<button disabled={regenerateDisabled} onClick={() => sendCommand("regenerate")}>重新生成</button></> : <button className="primary" disabled={testMode === "all" ? !state.llmReady || !state.asrReady : testMode === "asr" ? !state.asrReady : !state.llmReady} onClick={() => sendCommand("start")}>启动测试</button>}<span>{copyNotice || state.notice}</span></div>
       <div className="overlay-field-heading"><strong>当前问题</strong><small>{state.sessionMode === "answer" ? "可直接输入并提交" : "可编辑转写文本"}</small></div>
       <textarea className="overlay-question" value={questionDraft} onChange={(event) => changeQuestion(event.target.value)} placeholder="输入或等待当前面试问题…" />
       {showTranscript && <div className="overlay-transcript-block"><div className="overlay-partial" onWheel={(event) => { if (!state.wheelScroll.transcript) event.preventDefault(); }}><span>实时增量转写</span><p>{state.partial || "等待系统音频…"}</p></div></div>}
       {showAnswer && <><div className="overlay-answer-head"><strong>回答</strong><span className={"overlay-answer-status " + state.answerStatus}>{answerLabel}</span></div><article ref={answerRef} className="overlay-answer" onWheel={(event) => { if (!state.wheelScroll.answer) event.preventDefault(); }}>{state.answer || "回答生成后会在这里显示。"}</article></>}
-      {!compact && <div className="overlay-footer"><button onClick={() => void copyAnswer()} disabled={!state.answer}>复制回答</button><span>主窗口与悬浮窗共享同一场面试上下文</span></div>}
+      {!compact && <div className="overlay-footer"><button onClick={() => void copyAnswer()} disabled={!state.answer}>复制回答</button><button disabled={regenerateDisabled} onClick={() => sendCommand("regenerate")}>重新生成</button><span>主窗口与悬浮窗共享同一场面试上下文</span></div>}
     </section>
   </main>;
 }
@@ -314,7 +318,9 @@ function App() {
   const overlayBoundWindowRef = useRef<WebviewWindow | null>(null);
   const overlayUnlistenRef = useRef<Array<() => void>>([]);
   const overlayStatePersistTimerRef = useRef<number | undefined>(undefined);
-  const overlayActionsRef = useRef<{ start: (mode: TestMode) => void; submit: () => void; stop: () => void }>({ start: () => {}, submit: () => {}, stop: () => {} });
+  const overlayActionsRef = useRef<{ start: (mode: TestMode) => void; submit: () => void; stop: () => void; stopGeneration: () => void; regenerate: () => void }>({ start: () => {}, submit: () => {}, stop: () => {}, stopGeneration: () => {}, regenerate: () => {} });
+  const generationAbortRef = useRef<AbortController | null>(null);
+  const lastQuestionRef = useRef("");
   const interviewTurnsRef = useRef<InterviewTurn[]>([]);
   const completeHistoryCountRef = useRef(0);
   const activeSessionIdRef = useRef("");
@@ -404,6 +410,12 @@ function App() {
     if (!storageReady || isOverlayWindow) return;
     void getStorageDiagnostics().then(setStorageDiagnostics);
   }, [storageReady, isOverlayWindow]);
+  useEffect(() => {
+    if (!desktopRuntime || isOverlayWindow) return;
+    let unlisten: () => void = () => {};
+    void getCurrentWindow().onCloseRequested(async () => { await markCleanShutdown(); }).then((cleanup) => { unlisten = cleanup; });
+    return () => unlisten();
+  }, [desktopRuntime, isOverlayWindow]);
   useEffect(() => { if (!repositoryUrl && materials.repository?.url) setRepositoryUrl(materials.repository.url); }, [materials.repository?.url, repositoryUrl]);
   useEffect(() => { questionRef.current = question; }, [question]);
   useEffect(() => {
@@ -429,16 +441,33 @@ function App() {
   useEffect(() => {
     if (!desktopRuntime || isOverlayWindow) return;
     let alive = true;
-    void unregisterAll().then(() => settings.shortcutEnabled && settings.shortcut ? register(toGlobalShortcut(settings.shortcut), (event) => {
-      if (alive && event.state === "Pressed") void submitQuestion();
-    }) : undefined).catch(() => setNotice("全局快捷键注册失败，可使用“提交当前问题”按钮。"));
+    void unregisterAll().then(async () => {
+      if (!settings.shortcutEnabled) return;
+      const bindings: Array<[string, () => void]> = [
+        [settings.shortcut, () => { void submitQuestion(); }],
+        [settings.overlayToggleShortcut, () => { void toggleOverlayWindow(); }],
+        [settings.stopGenerationShortcut, () => { stopGeneration(); }],
+        [settings.clickThroughShortcut, () => { void toggleOverlayClickThrough(); }],
+      ];
+      const seen = new Set<string>();
+      for (const [shortcut, handler] of bindings) {
+        if (!shortcut?.trim()) continue;
+        const globalShortcut = toGlobalShortcut(shortcut);
+        if (seen.has(globalShortcut)) continue;
+        seen.add(globalShortcut);
+        await register(globalShortcut, (event) => {
+          if (alive && event.state === "Pressed") handler();
+        });
+      }
+    }).catch(() => setNotice("全局快捷键注册失败，可使用界面按钮。"));
     return () => { alive = false; void unregisterAll(); };
-  }, [desktopRuntime, isOverlayWindow, settings.shortcut, settings.shortcutEnabled, sessionActive]);
+  }, [desktopRuntime, isOverlayWindow, settings.shortcut, settings.overlayToggleShortcut, settings.stopGenerationShortcut, settings.clickThroughShortcut, settings.shortcutEnabled, sessionActive]);
   useEffect(() => {
     if (!desktopRuntime || isOverlayWindow) return;
     const state: OverlayState = {
       answer,
       question,
+      lastQuestion: lastQuestionRef.current,
       partial,
       sessionActive,
       sessionMode,
@@ -640,6 +669,7 @@ function App() {
       lastOmittedTurnCount: 0,
     };
     activeSessionIdRef.current = session.id;
+    lastQuestionRef.current = "";
     setActiveSessionTitle(title);
     setActiveSessionSourceTitle(sourceTitle);
     setActiveSessionCarriedTurnCount(carriedTurns.length);
@@ -800,6 +830,8 @@ function App() {
     void startSession(mode);
   }
   async function stopSession() {
+    generationAbortRef.current?.abort();
+    generationAbortRef.current = null;
     const wasAsrSession = sessionMode === "asr" || sessionMode === "all";
     asrRef.current?.close(); asrRef.current = undefined;
     if (desktopRuntime && wasAsrSession) await invoke("stop_system_audio_capture").catch(() => undefined);
@@ -835,9 +867,23 @@ function App() {
       }, 1500);
     } catch (error) { setAsrStatus("error"); setNotice(error instanceof Error ? error.message : "提交失败"); }
   }
+  function stopGeneration() {
+    const controller = generationAbortRef.current;
+    if (!controller || controller.signal.aborted) return;
+    controller.abort();
+    setAnswerStatus("idle");
+    setNotice("已停止生成，当前未完成回答不会写入上下文。");
+  }
+  async function regenerateAnswer() {
+    if (answerStatus === "generating" || !lastQuestionRef.current.trim()) return;
+    await generateAnswer(lastQuestionRef.current);
+  }
   async function generateAnswer(rawQuestion: string) {
     const finalQuestion = rawQuestion.trim();
     if (!finalQuestion || answerStatus === "generating" || !activeProfile) return;
+    lastQuestionRef.current = finalQuestion;
+    const abortController = new AbortController();
+    generationAbortRef.current = abortController;
     const previousTurns = interviewTurnsRef.current;
     const contextSelection = selectInterviewContext(previousTurns, activeProfile.contextWindow);
     setContextStats({ total: completeHistoryCountRef.current, sent: contextSelection.turns.length, omitted: contextSelection.omittedCount });
@@ -849,14 +895,14 @@ function App() {
     }
     pendingRef.current = false; setQuestion(""); setPartial(""); setAnswer(""); setAnswerStatus("generating"); setAsrStatus("listening");
     await showOverlay("", false, false);
+    let full = "";
     try {
-      let full = "";
       const activeStageSummary = history.find((session) => session.id === activeSessionIdRef.current)?.stageSummary || "";
       await streamLlm(activeProfile, buildInterviewPrompt(finalQuestion, materials, previousTurns, activeProfile.answerDetail, settings.interviewFocus, activeProfile.contextWindow, activeStageSummary, effectiveAnswerFramework), (delta) => {
         full += delta;
         const cleanAnswer = sanitizeAnswerText(full);
         setAnswer(cleanAnswer);
-      });
+      }, abortController.signal);
       const cleanAnswer = sanitizeAnswerText(full);
       setAnswerStatus("complete");
       interviewTurnsRef.current = [...previousTurns, { question: finalQuestion, answer: cleanAnswer }];
@@ -865,9 +911,16 @@ function App() {
       setContextStats((stats) => ({ ...stats, total: completeHistoryCountRef.current }));
       appendSessionRecord({ id: crypto.randomUUID(), createdAt: new Date().toISOString(), question: finalQuestion, answer: cleanAnswer, asrName: settings.asr.name, llmName: activeProfile.name });
     } catch (error) {
+      if (abortController.signal.aborted) {
+        setAnswerStatus("idle");
+        setNotice("已停止生成，当前未完成回答不会写入上下文。");
+        return;
+      }
       const message = error instanceof Error ? error.message : "文本模型请求失败";
       setAnswerStatus("error"); setNotice(message);
       appendSessionRecord({ id: crypto.randomUUID(), createdAt: new Date().toISOString(), question: finalQuestion, answer: "", asrName: settings.asr.name, llmName: activeProfile.name, error: message });
+    } finally {
+      if (generationAbortRef.current === abortController) generationAbortRef.current = null;
     }
   }
   async function copyAnswer() {
@@ -921,6 +974,25 @@ function App() {
       else await getCurrentWindow().setFocus().catch(() => undefined);
     }
     window.setTimeout(() => void emitTo("answer-overlay", "overlay-state", snapshot).catch(() => undefined), 350);
+  }
+  async function toggleOverlayWindow() {
+    if (!desktopRuntime || isOverlayWindow) return;
+    const windowRef = await WebviewWindow.getByLabel("answer-overlay");
+    if (windowRef) {
+      const visible = await windowRef.isVisible().catch(() => false);
+      if (visible) {
+        await windowRef.hide();
+        return;
+      }
+    }
+    await showOverlay(overlayStateRef.current.answer, true, true);
+  }
+  async function toggleOverlayClickThrough() {
+    const next = !overlayStateRef.current.overlaySettings.clickThrough;
+    setSettings((state) => ({ ...state, overlay: { ...state.overlay, clickThrough: next } }));
+    const windowRef = await WebviewWindow.getByLabel("answer-overlay");
+    if (windowRef) await windowRef.setIgnoreCursorEvents(next).catch(() => undefined);
+    setNotice(next ? "悬浮窗已开启点击穿透；可再次按快捷键关闭。" : "悬浮窗已恢复可交互。");
   }
   function importMaterial(kind: "resume" | "jobDescription") {
     const input = document.createElement("input"); input.type = "file"; input.accept = ".pdf,.docx,.txt,.md";
@@ -992,6 +1064,8 @@ function App() {
     start: (mode) => startTest(mode),
     submit: () => { void submitQuestion(); },
     stop: () => { void stopSession(); },
+    stopGeneration: () => stopGeneration(),
+    regenerate: () => { void regenerateAnswer(); },
   };
   useEffect(() => {
     if (!desktopRuntime || isOverlayWindow) return;
@@ -1008,6 +1082,10 @@ function App() {
           overlayActionsRef.current.submit();
         } else if (payload.command === "stop") {
           overlayActionsRef.current.stop();
+        } else if (payload.command === "stop-generation") {
+          overlayActionsRef.current.stopGeneration();
+        } else if (payload.command === "regenerate") {
+          overlayActionsRef.current.regenerate();
         } else if (payload.command === "hide") {
           void WebviewWindow.getByLabel("answer-overlay").then((windowRef) => windowRef?.hide());
         }
@@ -1034,7 +1112,7 @@ function App() {
   return <main className="app-shell">
     <aside className="sidebar"><div className="brand"><span>IL</span><div><strong>Interview Lab</strong><small>实时语音测试台</small></div></div>
       {(["session", "materials", "settings", "history"] as Tab[]).map((item) => <button key={item} className={tab === item ? "nav active" : "nav"} onClick={() => setTab(item)}>{({ session: "会话控制", materials: "候选人材料", settings: "服务配置", history: "文本记录" })[item]}</button>)}
-      <p className="sidebar-footer">受控测试模式<br />不保存原始音频</p></aside>
+      <p className="sidebar-footer">受控测试模式<br />不保存原始音频<br /><span className="build-stamp">v{BUILD_INFO.version} · {BUILD_INFO.commit}</span></p></aside>
     <section className={tab === "session" ? "content session-content" : "content"}><header className="topbar"><div><p className="eyebrow">WINDOWS · REALTIME ASR · LLM</p><h1>{({ session: "会话控制", materials: "候选人材料", settings: "服务配置", history: "文本记录" })[tab]}</h1></div><span className={`status ${statusClass}`}>{statusLabel}</span></header>
       <p className="notice">{notice}</p>
       <div className="quick-status" aria-label="当前配置状态"><span className={llmReady ? "ready" : "pending"}><i />文本模型：{llmReady ? "已就绪" : "待配置"}</span><span className={asrReady ? "ready" : "muted"}><i />ASR：{asrReady ? "已配置" : "未配置"}</span>{tab === "materials" && <span className={materialClass}><i />材料：{materialLabel}</span>}{storageError && <span className="pending"><i />本机存储：异常</span>}<span className="autosave-state"><i />设置自动保存在本机</span></div>
@@ -1057,7 +1135,7 @@ function App() {
         </div>
         <div className="panel answer-panel">
           <div className="panel-head"><div><div className="panel-kicker">AI RESPONSE</div><h2>中文回答</h2><p>{INTERVIEW_FOCUS_LABELS[settings.interviewFocus]} · {activeProfile?.answerDetail === "detailed" ? "详细" : activeProfile?.answerDetail === "concise" ? "简洁" : "标准"}</p></div><span className={`answer-status ${answerStatus}`}>{answerStatus === "generating" ? "流式生成中" : answerStatus === "complete" ? "已完成" : answerStatus === "error" ? "生成失败" : "等待问题"}</span></div>
-          <div className="answer-toolbar answer-toolbar-top"><button onClick={() => void copyAnswer()} disabled={!answer}>复制回答</button><button onClick={() => void showOverlay(answer, true)}>打开悬浮窗</button><button className="primary" disabled={!sessionActive || !question || answerStatus === "generating" || !llmReady} onClick={() => void generateAnswer(question)}>用当前文本生成</button></div>
+          <div className="answer-toolbar answer-toolbar-top"><button onClick={() => void copyAnswer()} disabled={!answer}>复制回答</button><button onClick={() => void showOverlay(answer, true)}>打开悬浮窗</button>{answerStatus === "generating" ? <button className="danger" onClick={stopGeneration}>停止生成</button> : <><button onClick={() => void regenerateAnswer()} disabled={!sessionActive || !lastQuestionRef.current || !llmReady}>重新生成</button><button className="primary" disabled={!sessionActive || !question || !llmReady} onClick={() => void generateAnswer(question)}>用当前文本生成</button></>}</div>
           <AnswerView answer={answer} wheelEnabled={settings.wheelScroll.answer} />
         </div>
         {settings.asr.debug && <div className="panel debug-panel"><h2>ASR 调试消息</h2><pre>{debug.join("\n\n") || "等待 WebSocket 消息…"}</pre></div>}
@@ -1067,7 +1145,7 @@ function App() {
       {tab === "settings" && <section className="settings-stack"><AsrProviderPanel settings={settings} asrProfileTests={asrProfileTests} expandedPresetIds={expandedAsrPresetIds} onToggleExpanded={toggleAsrPresetExpanded} onSelect={selectAsrPreset} onUpdate={updateAsrProfile} onTest={testAsrProfile} onSave={saveConfiguration} />
         <LlmProviderPanel settings={settings} setSettings={setSettings} profileTests={profileTests} profileModelStates={profileModelStates} profileQuery={profileQuery} profileSort={profileSort} expandedProfileIds={expandedProfileIds} setProfileQuery={setProfileQuery} setProfileSort={setProfileSort} onToggleExpanded={toggleProfileExpanded} onAddPreset={addProfileFromPreset} onApplyPreset={applyProfilePreset} onDuplicate={duplicateProfile} onRemove={removeProfile} onMove={moveProfile} onTest={testProfile} onLoadModels={loadProfileModels} onSave={saveConfiguration} />
         <div className="panel"><div className="panel-head"><div><h2>回答策略</h2><p>默认策略会用于新会话；会话页可以临时覆盖，不会改动这里的配置。</p></div></div><div className="form-grid"><Field label="面试方向" value={settings.interviewFocus} onChange={(value) => setSettings((state) => ({ ...state, interviewFocus: value as InterviewFocus }))} select={Object.entries(INTERVIEW_FOCUS_LABELS)} /><Field label="默认回答框架" value={settings.answerFramework} onChange={(value) => setSettings((state) => ({ ...state, answerFramework: value as AnswerFramework }))} select={Object.entries(ANSWER_FRAMEWORK_LABELS)} /></div></div>
-        <div className="panel"><div className="panel-head"><div><h2>全局快捷键</h2><p>关闭后不会注册或响应该快捷键。</p></div><label className="checkbox shortcut-toggle"><input type="checkbox" checked={settings.shortcutEnabled} onChange={(event) => setSettings((state) => ({ ...state, shortcutEnabled: event.target.checked }))} />启用快捷键</label></div><div className="shortcut-field"><span>快捷键</span><ShortcutRecorder value={settings.shortcut} onChange={(value) => setSettings((state) => ({ ...state, shortcut: value }))} /></div></div>
+        <div className="panel"><div className="panel-head"><div><h2>全局快捷键</h2><p>关闭后不会注册或响应该组快捷键；快捷键冲突时请更换组合。</p></div><label className="checkbox shortcut-toggle"><input type="checkbox" checked={settings.shortcutEnabled} onChange={(event) => setSettings((state) => ({ ...state, shortcutEnabled: event.target.checked }))} />启用快捷键</label></div><div className="shortcut-grid"><div className="shortcut-field"><span>提交当前问题</span><ShortcutRecorder value={settings.shortcut} onChange={(value) => setSettings((state) => ({ ...state, shortcut: value }))} /></div><div className="shortcut-field"><span>显示 / 隐藏悬浮窗</span><ShortcutRecorder value={settings.overlayToggleShortcut} onChange={(value) => setSettings((state) => ({ ...state, overlayToggleShortcut: value }))} /></div><div className="shortcut-field"><span>停止回答生成</span><ShortcutRecorder value={settings.stopGenerationShortcut} onChange={(value) => setSettings((state) => ({ ...state, stopGenerationShortcut: value }))} /></div><div className="shortcut-field"><span>切换点击穿透</span><ShortcutRecorder value={settings.clickThroughShortcut} onChange={(value) => setSettings((state) => ({ ...state, clickThroughShortcut: value }))} /></div></div></div>
         <OverlaySettingsPanel settings={settings.overlay} onChange={(patch) => setSettings((state) => ({ ...state, overlay: { ...state.overlay, ...patch } }))} />
         <div className="panel"><div className="panel-head"><div><h2>界面行为</h2><p>分别控制转写区和回答区是否响应鼠标滚轮。</p></div></div><div className="settings-toggle-grid"><label className="checkbox"><input type="checkbox" checked={settings.wheelScroll.transcript} onChange={(event) => setSettings((state) => ({ ...state, wheelScroll: { ...state.wheelScroll, transcript: event.target.checked } }))} />转写区允许滚轮滚动</label><label className="checkbox"><input type="checkbox" checked={settings.wheelScroll.answer} onChange={(event) => setSettings((state) => ({ ...state, wheelScroll: { ...state.wheelScroll, answer: event.target.checked } }))} />回答区允许滚轮滚动</label></div></div>
         <DataSafetyPanel diagnostics={storageDiagnostics} busy={storageBundleBusy} onExport={exportSafeBackup} onImport={importSafeBackup} />
@@ -1111,7 +1189,7 @@ function DataSafetyPanel({ diagnostics, busy, onExport, onImport }: { diagnostic
   const integrityLabel = diagnostics?.integrity === "ok" ? "完整性正常" : diagnostics?.integrity === "error" ? "需要检查" : "未检测";
   return <div className="panel data-safety-panel">
     <div className="panel-head"><div><div className="panel-kicker">DATA SAFETY</div><h2>数据与恢复</h2><p>安全备份不包含 API Key；桌面端密钥只保存在 Stronghold，导入后保留本机已有凭证。</p></div><span className={`context-state ${diagnostics?.integrity === "ok" ? "ready" : diagnostics?.integrity === "error" ? "pending" : "muted"}`}><i />{integrityLabel}</span></div>
-    <div className="storage-diagnostics"><span>存储：{backendLabel}</span><span>数据版本：{diagnostics?.schemaVersion || "—"}</span><span>密钥：{diagnostics?.secretStore === "stronghold" ? "Stronghold" : "不持久化"}</span><span>备份：{diagnostics?.backupCount ?? "—"} 份</span>{diagnostics?.lastBackupAt && <span>最近备份：{new Date(diagnostics.lastBackupAt).toLocaleString()}</span>}</div>
+    <div className="storage-diagnostics"><span>存储：{backendLabel}</span><span>数据版本：{diagnostics?.schemaVersion || BUILD_INFO.dataSchema}</span><span>密钥：{diagnostics?.secretStore === "stronghold" ? "Stronghold" : "不持久化"}</span><span>备份：{diagnostics?.backupCount ?? "—"} 份</span><span className={diagnostics?.uncleanExit ? "diagnostic-warning" : ""}>{diagnostics?.uncleanExit ? "上次异常退出，已保留现有数据" : "上次退出状态正常"}</span>{diagnostics?.lastCleanShutdownAt && <span>上次正常退出：{new Date(diagnostics.lastCleanShutdownAt).toLocaleString()}</span>}{diagnostics?.lastBackupAt && <span>最近备份：{new Date(diagnostics.lastBackupAt).toLocaleString()}</span>}<span>构建：v{BUILD_INFO.version} · {BUILD_INFO.commit}{BUILD_INFO.builtAt ? ` · ${new Date(BUILD_INFO.builtAt).toLocaleString()}` : ""}</span></div>
     <div className="storage-actions"><button onClick={onExport}>导出安全备份</button><button onClick={onImport} disabled={busy}>{busy ? "导入中…" : "导入安全备份"}</button></div>
   </div>;
 }

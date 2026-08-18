@@ -95,12 +95,16 @@ function textFromEvent(value: unknown): string {
   return "";
 }
 
-async function consumeSse(response: Response, onDelta: (text: string) => void) {
+async function consumeSse(response: Response, onDelta: (text: string) => void, signal?: AbortSignal) {
   if (!response.body) throw new Error("模型未返回流式响应");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   while (true) {
+    if (signal?.aborted) {
+      await reader.cancel();
+      throw new DOMException("The operation was aborted.", "AbortError");
+    }
     const { value, done } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
@@ -120,7 +124,7 @@ async function consumeSse(response: Response, onDelta: (text: string) => void) {
   }
 }
 
-export async function streamLlm(profile: LlmProfile, prompt: string, onDelta: (text: string) => void) {
+export async function streamLlm(profile: LlmProfile, prompt: string, onDelta: (text: string) => void, signal?: AbortSignal) {
   if (!profile.baseUrl || !profile.model || (providerRequiresKey(profile) && !profile.apiKey)) {
     throw new Error(providerRequiresKey(profile) ? "请先完整配置文本模型的 Base URL、Key 和模型名称" : "请先完整配置本地模型的 Base URL 和模型名称");
   }
@@ -134,9 +138,10 @@ export async function streamLlm(profile: LlmProfile, prompt: string, onDelta: (t
     method: "POST",
     headers: authHeaders(profile),
     body: JSON.stringify(body),
+    signal,
   });
   if (!response.ok) throw new Error(`文本模型请求失败：${response.status} ${await response.text()}`);
-  await consumeSse(response, onDelta);
+  await consumeSse(response, onDelta, signal);
 }
 
 export async function listLlmModels(profile: LlmProfile) {

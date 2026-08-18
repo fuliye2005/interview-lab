@@ -185,6 +185,18 @@ describe("streamLlm reasoning settings", () => {
 
     await expect(listLlmModels(profile())).resolves.toEqual(["a-model", "z-model"]);
   });
+
+  it("passes an abort signal through streaming requests", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      expect(init?.signal).toBe(controller.signal);
+      controller.abort();
+      return sseResponse();
+    });
+
+    await expect(streamLlm(profile(), "问题", () => undefined, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchMock).toHaveBeenCalled();
+  });
 });
 
 describe("sanitizeAnswerText", () => {

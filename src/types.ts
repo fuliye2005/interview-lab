@@ -159,6 +159,9 @@ export interface AppSettings {
   llmProfiles: LlmProfile[];
   activeLlmProfileId: string;
   shortcut: string;
+  overlayToggleShortcut: string;
+  stopGenerationShortcut: string;
+  clickThroughShortcut: string;
   shortcutEnabled: boolean;
   interviewFocus: InterviewFocus;
   answerFramework: AnswerFramework;
