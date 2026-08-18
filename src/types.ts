@@ -85,6 +85,11 @@ export interface InterviewSession {
   turns: SessionRecord[];
 }
 
+export interface WheelScrollSettings {
+  transcript: boolean;
+  answer: boolean;
+}
+
 export type AsrStatus = "idle" | "connecting" | "listening" | "finalizing" | "error";
 export type AnswerStatus = "idle" | "generating" | "complete" | "error";
 
@@ -96,6 +101,7 @@ export interface AppSettings {
   shortcut: string;
   interviewFocus: InterviewFocus;
   sessionTitleDraft: string;
+  wheelScroll: WheelScrollSettings;
 }
 
 const commonAsrConfig = (): Omit<AsrProviderConfig, "name" | "preset" | "protocol" | "wsUrl" | "apiKey" | "audioMode"> => ({

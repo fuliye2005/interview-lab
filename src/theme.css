@@ -110,6 +110,7 @@ button { white-space: nowrap; }
 .materials-grid textarea, .settings-stack textarea { padding: 8px 10px; font-size: 13px; }
 .materials-grid label, .settings-stack label { gap: 5px; font-size: 12px; }
 .materials-grid .panel-head p, .settings-stack .panel-head p, .history-panel .panel-head p { font-size: 11px; }
+.settings-toggle-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 18px; margin-top: 14px; }.settings-toggle-grid .checkbox { margin: 0; padding: 10px 11px; border: 1px solid #2b3a55; border-radius: 8px; background: #101827; }
 .session-title-draft { margin: 0 0 10px; }.session-title-draft span, .history-session-title-editor span { color: #c6d1e6; font-size: 12px; font-weight: 600; }.session-title-draft input { padding: 8px 10px; font-size: 13px; }
 .history-list { display: grid; gap: 8px; margin-top: 12px; }.history-summary { display: grid; grid-template-columns: minmax(180px, 1.15fr) minmax(230px, 1fr) minmax(150px, .7fr); align-items: center; gap: 14px; width: 100%; padding: 12px 13px; border: 1px solid #2b3a54; border-radius: 8px; color: #aebbd0; background: #101827; text-align: left; box-shadow: none; }.history-summary:hover:not(:disabled) { border-color: #5875c9; background: #16213a; transform: none; }.history-summary strong { overflow: hidden; color: #edf3ff; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }.history-summary span { color: #98a8c1; font-size: 12px; }.history-summary small { overflow: hidden; color: #72839f; font-size: 11px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .history-detail { display: grid; gap: 12px; }.history-detail-header { align-items: flex-start; }.history-back { display: block; margin: 0 0 8px; color: #a7b8e8; }.history-session-title-editor { margin: 0; }.history-session-title-editor input { padding: 9px 10px; font-size: 14px; font-weight: 600; }.history-meta { display: flex; flex-wrap: wrap; gap: 7px; }.history-meta span { padding: 5px 7px; border: 1px solid #2b3b58; border-radius: 999px; color: #90a0b9; background: #101827; font-size: 11px; }.history-turn-list { display: grid; gap: 0; }.history-turn { margin: 0; padding: 14px 0; }.history-turn:first-child { padding-top: 2px; border-top: 0; }.history-turn-time { margin-bottom: 6px; color: #6f809c; font-size: 11px; }
@@ -135,6 +136,7 @@ button { white-space: nowrap; }
   .answer-toolbar { justify-content: stretch; }.answer-toolbar button { flex: 1 1 auto; }
   .button-row { flex-wrap: wrap; }
   .history-summary { grid-template-columns: 1fr; gap: 5px; }.history-summary small { text-align: left; }
+  .settings-toggle-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-height: 760px) and (min-width: 1051px) {

@@ -1,12 +1,24 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadHistory } from "./storage";
+import { loadHistory, loadSettings } from "./storage";
 
 const historyKey = "interview-lab.history.v1";
+const settingsKey = "interview-lab.settings.v1";
 
 afterEach(() => vi.unstubAllGlobals());
 
 function setStoredHistory(value: unknown) {
   const values = new Map([[historyKey, JSON.stringify(value)]]);
+  vi.stubGlobal("window", {
+    localStorage: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, item: string) => values.set(key, item),
+      removeItem: (key: string) => values.delete(key),
+    },
+  });
+}
+
+function setStoredSettings(value: unknown) {
+  const values = new Map([[settingsKey, JSON.stringify(value)]]);
   vi.stubGlobal("window", {
     localStorage: {
       getItem: (key: string) => values.get(key) ?? null,
@@ -37,5 +49,13 @@ describe("loadHistory", () => {
     setStoredHistory([{ id: "session-2", title: "解决方案顾问一面", createdAt: "2026-08-17T08:00:00.000Z", updatedAt: "2026-08-17T08:05:00.000Z", asrName: "ASR", llmName: "LLM", carriedTurnCount: 0, turns: [] }]);
 
     expect(loadHistory()[0]).toMatchObject({ id: "session-2", title: "解决方案顾问一面" });
+  });
+});
+
+describe("loadSettings", () => {
+  it("keeps wheel scrolling disabled by default and merges partial legacy settings", () => {
+    setStoredSettings({ wheelScroll: { answer: true } });
+
+    expect(loadSettings().wheelScroll).toEqual({ transcript: false, answer: true });
   });
 });

@@ -13,6 +13,7 @@ export const defaultSettings = (): AppSettings => ({
   shortcut: "Ctrl+Shift+Space",
   interviewFocus: "technical-business",
   sessionTitleDraft: "",
+  wheelScroll: { transcript: false, answer: false },
 });
 
 export const emptyMaterials = (): MaterialContext => ({
@@ -52,6 +53,7 @@ function normalizeLlmProfile(profile: Partial<LlmProfile>): LlmProfile {
 export function loadSettings(): AppSettings {
   const stored = read<Partial<AppSettings> | null>(SETTINGS_KEY, defaultSettings()) ?? {};
   const fallback = defaultSettings();
+  const storedWheelScroll = stored.wheelScroll && typeof stored.wheelScroll === "object" ? stored.wheelScroll : {};
   const llmProfiles = Array.isArray(stored.llmProfiles) && stored.llmProfiles.length
     ? stored.llmProfiles.map((profile) => normalizeLlmProfile(profile))
     : fallback.llmProfiles;
@@ -75,6 +77,7 @@ export function loadSettings(): AppSettings {
     llmProfiles,
     interviewFocus: isInterviewFocus(stored.interviewFocus) ? stored.interviewFocus : fallback.interviewFocus,
     sessionTitleDraft: typeof stored.sessionTitleDraft === "string" ? stored.sessionTitleDraft : fallback.sessionTitleDraft,
+    wheelScroll: { ...fallback.wheelScroll, ...storedWheelScroll },
   };
   if (!settings.llmProfiles.some((profile) => profile.id === settings.activeLlmProfileId)) {
     settings.activeLlmProfileId = settings.llmProfiles[0]?.id || "";
