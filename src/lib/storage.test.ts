@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSafeDataBundle, defaultSettings, loadHistory, loadSettings, mergeStoredHeaderConfig, parseSafeDataBundle, saveSettings, saveSnapshot } from "./storage";
+import { createExternalSnapshot, createSafeDataBundle, defaultSettings, loadHistory, loadSettings, mergeStoredHeaderConfig, parseExternalSnapshot, parseSafeDataBundle, saveSettings, saveSnapshot } from "./storage";
 
 const historyKey = "interview-lab.history.v1";
 const settingsKey = "interview-lab.settings.v1";
@@ -207,5 +207,32 @@ describe("loadSettings", () => {
     expect(() => parseSafeDataBundle(JSON.stringify({ format: "other", version: 1 }))).toThrow("不支持");
     expect(() => parseSafeDataBundle(JSON.stringify({ format: "interview-lab-backup", version: 2, settings: {}, materials: {} }))).toThrow("缺少配置");
     expect(() => parseSafeDataBundle(JSON.stringify({ format: "interview-lab-backup", version: 3, settings: {}, materials: {}, history: [] }))).toThrow("不支持");
+  });
+});
+
+describe("external recovery snapshots", () => {
+  it("creates a versioned snapshot without API keys or sensitive headers", () => {
+    const settings = defaultSettings();
+    settings.asr.apiKey = "asr-external-secret";
+    settings.asr.extraHeaders = JSON.stringify({ Authorization: "Bearer external-header-secret", "X-Trace": "keep" });
+    settings.llmProfiles[0].apiKey = "llm-external-secret";
+    settings.llmProfiles[0].extraHeaders = JSON.stringify({ "X-API-Key": "header-secret", "X-Trace": "keep" });
+    const snapshot = createExternalSnapshot({ settings, materials: { resume: "简历", jobDescription: "JD", personalNotes: "", candidateSummary: "", jobSummary: "", confirmed: false }, history: [] }, "test");
+
+    expect(snapshot).toMatchObject({ format: "interview-lab-snapshot", version: 2, reason: "test" });
+    expect(JSON.stringify(snapshot)).not.toContain("asr-external-secret");
+    expect(JSON.stringify(snapshot)).not.toContain("llm-external-secret");
+    expect(JSON.stringify(snapshot)).not.toContain("external-header-secret");
+    expect(JSON.stringify(snapshot)).toContain("********");
+  });
+
+  it("accepts only the current snapshot format and normalizes its contents", () => {
+    const settings = defaultSettings();
+    const snapshot = createExternalSnapshot({ settings, materials: { resume: "简历", jobDescription: "JD", personalNotes: "", candidateSummary: "", jobSummary: "", confirmed: false }, history: [] }, "test");
+
+    expect(parseExternalSnapshot(JSON.stringify(snapshot))).toMatchObject({ settings: { wheelScroll: { transcript: false, answer: false } }, history: [] });
+    expect(parseExternalSnapshot(JSON.stringify({ ...snapshot, version: 1 }))).toBeUndefined();
+    expect(parseExternalSnapshot(JSON.stringify({ ...snapshot, format: "other" }))).toBeUndefined();
+    expect(parseExternalSnapshot("not-json")).toBeUndefined();
   });
 });

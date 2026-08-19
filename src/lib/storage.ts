@@ -75,6 +75,14 @@ interface PersistentContext {
   startup: { uncleanExit: boolean; lastStartedAt?: string; lastCleanShutdownAt?: string; recoveryPerformed?: boolean; recoveryMessage?: string };
 }
 
+interface PersistedSnapshotPayload {
+  format?: unknown;
+  version?: unknown;
+  settings?: Partial<AppSettings>;
+  materials?: unknown;
+  history?: unknown;
+}
+
 let contextPromise: Promise<PersistentContext> | undefined;
 
 export const defaultSettings = (): AppSettings => ({
@@ -422,6 +430,38 @@ function redactSettings(settings: AppSettings): AppSettings {
   };
 }
 
+export function parseExternalSnapshot(raw: string | null | undefined): PersistentSnapshot | undefined {
+  if (!raw?.trim()) return undefined;
+  try {
+    const source = JSON.parse(raw) as PersistedSnapshotPayload;
+    if (source.format !== "interview-lab-snapshot" || source.version !== DATA_SCHEMA_VERSION) return undefined;
+    if (!source.settings || source.materials === undefined || !Array.isArray(source.history)) return undefined;
+    return {
+      settings: redactSettings(normalizeSettings(source.settings)),
+      materials: normalizeMaterials(source.materials),
+      history: normalizeHistory(source.history),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export function createExternalSnapshot(snapshot: PersistentSnapshot, reason: string) {
+  return {
+    format: "interview-lab-snapshot",
+    version: DATA_SCHEMA_VERSION,
+    exportedAt: new Date().toISOString(),
+    reason,
+    settings: redactSettings(snapshot.settings),
+    materials: snapshot.materials,
+    history: snapshot.history.slice(0, 50),
+  };
+}
+
+async function writeExternalSnapshot(snapshot: PersistentSnapshot, reason: string) {
+  await invoke("write_external_snapshot", { payload: JSON.stringify(createExternalSnapshot(snapshot, reason)) }).catch(() => undefined);
+}
+
 const MASKED_SECRET_PATTERN = /\*{4,}/;
 
 function hasMaskedSecret(value: unknown) {
@@ -602,11 +642,13 @@ async function readLatestBackup(context: PersistentContext): Promise<PersistentS
 
 async function maybeCreateBackup(context: PersistentContext, reason: string, force = false) {
   if (!force && Date.now() - context.lastBackupAt < BACKUP_INTERVAL_MS) return;
+  const createdAt = new Date().toISOString();
   await context.db.execute(
     "INSERT INTO storage_backups (created_at, reason, settings_payload, materials_payload, history_payload) VALUES ($1, $2, $3, $4, $5)",
-    [new Date().toISOString(), reason, JSON.stringify(redactSettings(context.snapshot.settings)), JSON.stringify(context.snapshot.materials), JSON.stringify(context.snapshot.history)],
+    [createdAt, reason, JSON.stringify(redactSettings(context.snapshot.settings)), JSON.stringify(context.snapshot.materials), JSON.stringify(context.snapshot.history.slice(0, 50))],
   );
   await context.db.execute("DELETE FROM storage_backups WHERE id NOT IN (SELECT id FROM storage_backups ORDER BY id DESC LIMIT 5)");
+  await writeExternalSnapshot(context.snapshot, reason);
   context.lastBackupAt = Date.now();
 }
 
@@ -629,8 +671,7 @@ async function persistHistoryNow(context: PersistentContext, history: InterviewS
   context.snapshot.history = history.slice(0, 50);
 }
 
-async function persistSnapshotNow(context: PersistentContext, snapshot: PersistentSnapshot, reason: string, forceBackup = false) {
-  await maybeCreateBackup(context, reason, forceBackup);
+async function persistSnapshotRows(context: PersistentContext, snapshot: PersistentSnapshot) {
   await context.db.execute("BEGIN");
   try {
     await upsertDocument(context, "settings", redactSettings(snapshot.settings));
@@ -641,6 +682,11 @@ async function persistSnapshotNow(context: PersistentContext, snapshot: Persiste
     await context.db.execute("ROLLBACK").catch(() => undefined);
     throw error;
   }
+}
+
+async function persistSnapshotNow(context: PersistentContext, snapshot: PersistentSnapshot, reason: string, forceBackup = false) {
+  await maybeCreateBackup(context, reason, forceBackup);
+  await persistSnapshotRows(context, snapshot);
   await writeSecrets(context, snapshot.settings);
   context.snapshot = { settings: snapshot.settings, materials: snapshot.materials, history: snapshot.history.slice(0, 50) };
 }
@@ -656,7 +702,16 @@ async function createTauriContext(): Promise<PersistentContext> {
     import("@tauri-apps/plugin-stronghold"),
     import("@tauri-apps/api/path"),
   ]);
-  const db = await Database.load(DATABASE_PATH) as unknown as SqlDatabase;
+  let databaseRecovered = false;
+  let db: SqlDatabase;
+  try {
+    db = await Database.load(DATABASE_PATH) as unknown as SqlDatabase;
+  } catch (error) {
+    const isolated = await invoke<string | null>("isolate_corrupt_database").catch(() => null);
+    if (!isolated) throw error;
+    databaseRecovered = true;
+    db = await Database.load(DATABASE_PATH) as unknown as SqlDatabase;
+  }
   const password = await invoke<string>("get_vault_password");
   const vaultPath = await join(await appDataDir(), "interview-lab.secrets.hold");
   const stronghold = await Stronghold.load(vaultPath, password);
@@ -676,6 +731,9 @@ async function createTauriContext(): Promise<PersistentContext> {
     lastBackupAt: 0,
     startup: { uncleanExit: false },
   };
+  const externalSnapshot = databaseRecovered
+    ? parseExternalSnapshot(await invoke<string | null>("read_latest_external_snapshot").catch(() => null))
+    : undefined;
   const runtimeRows = await db.select<Array<{ payload: string }>>("SELECT payload FROM app_documents WHERE document_key = $1", ["runtime"]);
   let previousRuntime: RuntimeMarker | undefined;
   try {
@@ -693,7 +751,17 @@ async function createTauriContext(): Promise<PersistentContext> {
   const materialsRows = await db.select<Array<{ payload: string }>>("SELECT payload FROM app_documents WHERE document_key = $1", ["materials"]);
   const historyRows = await db.select<Array<{ payload: string }>>("SELECT payload FROM interview_sessions ORDER BY updated_at DESC");
   const hasDatabaseState = settingsRows.length > 0 || materialsRows.length > 0 || historyRows.length > 0;
-  if (!hasDatabaseState && hasLegacyData()) {
+  if (!hasDatabaseState && externalSnapshot) {
+    const hydratedSettings = await hydrateSecrets(context, externalSnapshot.settings);
+    const recoveredSnapshot = { settings: hydratedSettings, materials: externalSnapshot.materials, history: externalSnapshot.history };
+    await persistSnapshotRows(context, recoveredSnapshot);
+    await writeSecrets(context, hydratedSettings);
+    context.snapshot = recoveredSnapshot;
+    context.startup.recoveryPerformed = true;
+    context.startup.recoveryMessage = "检测到数据库无法加载，已从最近的脱敏外部快照恢复配置、材料和会话；本机 Stronghold 凭证已保留。";
+  } else if (!hasDatabaseState && databaseRecovered) {
+    context.startup.recoveryMessage = "检测到数据库无法加载，已重建空数据库；没有可用的外部快照，未覆盖其它本机数据。";
+  } else if (!hasDatabaseState && hasLegacyData()) {
     const legacy = { settings: loadSettings(), materials: loadMaterials(), history: loadHistory() };
     context.snapshot = legacy;
     await writeSecrets(context, legacy.settings);
@@ -834,6 +902,7 @@ export async function initializeStorage(): Promise<PersistentSnapshot> {
 export async function markCleanShutdown() {
   const context = await getTauriContext();
   if (!context) return;
+  await writeExternalSnapshot(context.snapshot, "clean shutdown");
   await enqueue(context, () => upsertDocument(context, "runtime", { state: "clean", startedAt: context.startup.lastStartedAt || new Date().toISOString(), cleanAt: new Date().toISOString() })).catch(() => undefined);
 }
 
