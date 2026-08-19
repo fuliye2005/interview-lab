@@ -114,7 +114,7 @@ describe("buildInterviewPrompt", () => {
     expect(selected.omittedCount).toBeGreaterThan(0);
     expect(selected.turns[selected.turns.length - 1]?.question).toBe("问题 12");
     const prompt = buildInterviewPrompt("当前问题", materials, turns, "balanced", "technical-business", 1200);
-    expect(prompt).toContain("更早的");
+    expect(prompt).toContain("本次上下文窗口省略了");
     expect(prompt).toContain("问题 12");
     expect(prompt).not.toContain("问题 1\n");
   });
@@ -142,6 +142,21 @@ describe("buildInterviewPrompt", () => {
     expect(selectedChars).toBeLessThanOrEqual(1_600);
     expect(selected.turns.map((turn) => turn.id)).toEqual(["small-recent"]);
     expect(selected.omittedCount).toBe(2);
+  });
+
+  it("keeps original round numbers when a middle turn is omitted", () => {
+    const turns = [
+      { question: "固定事实", answer: "我负责过订单系统交付。", pinned: true },
+      { question: "超长中间问题".repeat(2_000), answer: "超长中间回答".repeat(2_000) },
+      { question: "最近问题", answer: "最近回答" },
+    ];
+
+    const prompt = buildInterviewPrompt("当前问题", materials, turns, "balanced", "technical-business", 1_000);
+
+    expect(prompt).toContain("本次上下文窗口省略了 1 轮");
+    expect(prompt).toContain("第 1 轮\n面试官：固定事实");
+    expect(prompt).toContain("第 3 轮\n面试官：最近问题");
+    expect(prompt).not.toContain("第 2 轮\n面试官：最近问题");
   });
 });
 

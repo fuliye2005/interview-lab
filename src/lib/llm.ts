@@ -74,7 +74,7 @@ export function selectInterviewContext(previousTurns: InterviewTurn[], contextWi
 export function buildInterviewPrompt(question: string, materials: MaterialContext, previousTurns: InterviewTurn[], detail: AnswerDetail = "balanced", focus: InterviewFocus = "technical-business", contextWindow = 8000, stageSummary = "", framework: AnswerFramework = "balanced") {
   const context = selectInterviewContext(previousTurns, contextWindow);
   const conversation = context.turns.length
-    ? `${context.omittedCount ? `更早的 ${context.omittedCount} 轮已保存在本地记录中，本次提示词从较新的轮次开始。\n\n` : ""}${context.turns.map((turn, index) => `第 ${index + 1 + context.omittedCount} 轮\n面试官：${turn.question}\n候选人：${turn.answer}`).join("\n\n")}`
+    ? `${context.omittedCount ? `本次上下文窗口省略了 ${context.omittedCount} 轮，完整记录仍保存在本地。\n\n` : ""}${context.turns.map((turn, index) => { const originalIndex = previousTurns.indexOf(turn); const round = originalIndex >= 0 ? originalIndex + 1 : index + 1; return `第 ${round} 轮\n面试官：${turn.question}\n候选人：${turn.answer}`; }).join("\n\n")}`
     : "这是本次面试的第一轮。";
   const detailInstruction = {
     concise: "回答精细程度：简洁。给出 2 到 3 条提纲和关键词，再给出约 120 到 220 字的直接回答，优先保留最重要的信息。",
