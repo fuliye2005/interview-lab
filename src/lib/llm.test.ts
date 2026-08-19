@@ -129,6 +129,20 @@ describe("buildInterviewPrompt", () => {
     expect(selected.turns.some((turn) => turn.id === "pinned")).toBe(true);
     expect(selected.turns[selected.turns.length - 1]?.question).toBe("较新问题 10");
   });
+
+  it("keeps the context within budget when pinned or recent turns are oversized", () => {
+    const turns = [
+      { id: "oversized-pinned", question: "固定事实".repeat(2_000), answer: "详细内容".repeat(2_000), pinned: true },
+      { id: "oversized-recent", question: "超长问题".repeat(2_000), answer: "超长回答".repeat(2_000) },
+      { id: "small-recent", question: "最近可用问题", answer: "简短回答" },
+    ];
+    const selected = selectInterviewContext(turns, 1_000);
+    const selectedChars = selected.turns.reduce((total, turn) => total + turn.question.length + turn.answer.length + 30, 0);
+
+    expect(selectedChars).toBeLessThanOrEqual(1_600);
+    expect(selected.turns.map((turn) => turn.id)).toEqual(["small-recent"]);
+    expect(selected.omittedCount).toBe(2);
+  });
 });
 
 describe("streamLlm reasoning settings", () => {

@@ -44,19 +44,28 @@ export function selectInterviewContext(previousTurns: InterviewTurn[], contextWi
   const selected: InterviewTurn[] = [];
   let usedChars = 0;
 
+  function trySelect(turn: InterviewTurn) {
+    const turnChars = turn.question.length + turn.answer.length + 30;
+    if (turnChars > maxChars || usedChars + turnChars > maxChars) return false;
+    selected.push(turn);
+    usedChars += turnChars;
+    return true;
+  }
+
   // Pinned turns are facts the user explicitly wants to keep, even when newer turns fill the window.
   for (const turn of previousTurns) {
     if (!turn.pinned) continue;
-    selected.push(turn);
-    usedChars += turn.question.length + turn.answer.length + 30;
+    trySelect(turn);
   }
   for (let index = previousTurns.length - 1; index >= 0; index -= 1) {
     const turn = previousTurns[index];
     if (turn.pinned) continue;
     const turnChars = turn.question.length + turn.answer.length + 30;
-    if (selected.length && usedChars + turnChars > maxChars) break;
-    selected.unshift(turn);
-    usedChars += turnChars;
+    // A single oversized turn is omitted, but a normal budget miss stops at this point
+    // so older turns cannot displace the newest context.
+    if (turnChars > maxChars) continue;
+    if (usedChars + turnChars > maxChars) break;
+    trySelect(turn);
   }
   selected.sort((left, right) => previousTurns.indexOf(left) - previousTurns.indexOf(right));
   return { turns: selected, omittedCount: previousTurns.length - selected.length };
