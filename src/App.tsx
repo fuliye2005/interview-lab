@@ -561,6 +561,14 @@ function App() {
     }).then((cleanup) => { unlisten = cleanup; });
     return () => unlisten();
   }, [desktopRuntime, isOverlayWindow, settings.llmProfiles]);
+  useEffect(() => {
+    if (!desktopRuntime || isOverlayWindow) return;
+    let unlisten: () => void = () => {};
+    void listen("tray-overlay-toggle", () => {
+      void toggleOverlayWindow();
+    }).then((cleanup) => { unlisten = cleanup; });
+    return () => unlisten();
+  }, [desktopRuntime, isOverlayWindow]);
   useEffect(() => { if (!repositoryUrl && materials.repository?.url) setRepositoryUrl(materials.repository.url); }, [materials.repository?.url, repositoryUrl]);
   useEffect(() => { questionRef.current = question; }, [question]);
   useEffect(() => {

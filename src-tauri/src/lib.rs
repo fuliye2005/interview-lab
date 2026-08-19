@@ -161,6 +161,7 @@ fn isolate_database_files(app: AppHandle) -> Result<Option<String>, String> {
 }
 
 fn build_tray_menu<R: Runtime>(app: &AppHandle<R>, payload: &TrayProfilesPayload) -> tauri::Result<tauri::menu::Menu<R>> {
+    let overlay = MenuItem::with_id(app, "overlay", "打开悬浮面试台", true, None::<&str>)?;
     let show = MenuItem::with_id(app, "show", "打开主窗口", true, None::<&str>)?;
     let header = MenuItem::with_id(app, "model-header", "切换当前文本模型", false, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 Interview Lab", true, None::<&str>)?;
@@ -176,7 +177,7 @@ fn build_tray_menu<R: Runtime>(app: &AppHandle<R>, payload: &TrayProfilesPayload
             None::<&str>,
         )?);
     }
-    let mut menu = MenuBuilder::new(app).item(&show).separator().item(&header);
+    let mut menu = MenuBuilder::new(app).item(&overlay).item(&show).separator().item(&header);
     for item in &profile_items {
         menu = menu.item(item);
     }
@@ -220,6 +221,9 @@ pub fn run() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
+                    "overlay" => {
+                        let _ = app.emit("tray-overlay-toggle", ());
+                    }
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.unminimize();
