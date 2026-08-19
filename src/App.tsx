@@ -8,13 +8,13 @@ import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { GenericAsrSession } from "./lib/asr";
 import { ASR_PROVIDER_PRESETS, asrConfigPreview, asrConfigReady, asrMissingFields, asrProviderLabel, classifyAsrError, testAsrConnection, testAsrFinalText } from "./lib/asr-providers";
 import { BUILD_INFO } from "./lib/build-info";
-import { buildInterviewPrompt, listLlmModels, sanitizeAnswerText, sanitizeLlmError, selectInterviewContext, streamLlm, testLlmConnection } from "./lib/llm";
+import { buildInterviewPrompt, listLlmModels, sanitizeAnswerText, sanitizeHeaderConfig, sanitizeLlmError, selectInterviewContext, streamLlm, testLlmConnection } from "./lib/llm";
 import { extractMaterialText, makeCandidateDraft, makeJobDraft } from "./lib/materials";
 import { applyLlmProviderPreset, LLM_PROVIDER_PRESETS, providerLabel, providerRequiresKey } from "./lib/providers";
 import { importRepository as importRepositoryMaterial } from "./lib/repository";
 import { detectRuntimeEnvironment } from "./lib/runtime";
 import { formatShortcut, shortcutKeyToken, toGlobalShortcut } from "./lib/shortcut";
-import { clearHistory, createSafeDataBundle, defaultSettings, emptyMaterials, getStorageDiagnostics, initializeStorage, loadHistory, loadMaterials, loadSettings, markCleanShutdown, parseSafeDataBundle, restoreLatestBackup, saveHistory, saveMaterials, saveSettings, saveSnapshot } from "./lib/storage";
+import { clearHistory, createSafeDataBundle, defaultSettings, emptyMaterials, getStorageDiagnostics, initializeStorage, loadHistory, loadMaterials, loadSettings, markCleanShutdown, mergeStoredHeaderConfig, parseSafeDataBundle, restoreLatestBackup, saveHistory, saveMaterials, saveSettings, saveSnapshot } from "./lib/storage";
 import type { StorageDiagnostics } from "./lib/storage";
 import type { AnswerFramework, AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, InterviewContextTurn, InterviewFocus, InterviewSession, InterviewTurn, LlmProfile, LlmProviderPresetId, MaterialContext, OverlayLayout, OverlaySettings, SessionRecord, WheelScrollSettings } from "./types";
 import { ANSWER_FRAMEWORK_LABELS, createAsrPreset, createDefaultLlmProfile, INTERVIEW_FOCUS_LABELS } from "./types";
@@ -155,7 +155,7 @@ function profileRawConfig(profile: LlmProfile, focus: InterviewFocus, revealKey 
     context_window: formatContextWindow(profile.contextWindow || 8000),
     answer_detail: profile.answerDetail,
     reasoning_effort: profile.reasoningEffort,
-    extra_headers: profile.extraHeaders || "",
+    extra_headers: sanitizeHeaderConfig(profile.extraHeaders, revealKey),
     interview_focus: focus,
   }, null, 2);
 }
@@ -1143,9 +1143,16 @@ function App() {
         const currentProfilesByName = new Map(settings.llmProfiles.map((profile) => [profile.name, profile]));
         const importedSettings: AppSettings = {
           ...bundle.settings,
-          asr: { ...bundle.settings.asr, apiKey: settings.asr.apiKey },
-          asrProfiles: Object.fromEntries(Object.entries(bundle.settings.asrProfiles).map(([preset, profile]) => [preset, profile ? { ...profile, apiKey: settings.asrProfiles[preset as AsrPreset]?.apiKey || "" } : profile])) as AppSettings["asrProfiles"],
-          llmProfiles: bundle.settings.llmProfiles.map((profile) => ({ ...profile, apiKey: currentProfiles.get(profile.id)?.apiKey || currentProfilesByName.get(profile.name)?.apiKey || "" })),
+          asr: { ...bundle.settings.asr, apiKey: settings.asr.apiKey, extraHeaders: mergeStoredHeaderConfig(bundle.settings.asr.extraHeaders, settings.asr.extraHeaders) },
+          asrProfiles: Object.fromEntries(Object.entries(bundle.settings.asrProfiles).map(([preset, profile]) => [preset, profile ? {
+            ...profile,
+            apiKey: settings.asrProfiles[preset as AsrPreset]?.apiKey || "",
+            extraHeaders: mergeStoredHeaderConfig(profile.extraHeaders, settings.asrProfiles[preset as AsrPreset]?.extraHeaders),
+          } : profile])) as AppSettings["asrProfiles"],
+          llmProfiles: bundle.settings.llmProfiles.map((profile) => {
+            const current = currentProfiles.get(profile.id) || currentProfilesByName.get(profile.name);
+            return { ...profile, apiKey: current?.apiKey || "", extraHeaders: mergeStoredHeaderConfig(profile.extraHeaders, current?.extraHeaders) };
+          }),
         };
         await saveSnapshot({ settings: importedSettings, materials: bundle.materials, history: bundle.history });
         setSettings(importedSettings);

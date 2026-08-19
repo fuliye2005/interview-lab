@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSafeDataBundle, defaultSettings, loadHistory, loadSettings, parseSafeDataBundle, saveSettings, saveSnapshot } from "./storage";
+import { createSafeDataBundle, defaultSettings, loadHistory, loadSettings, mergeStoredHeaderConfig, parseSafeDataBundle, saveSettings, saveSnapshot } from "./storage";
 
 const historyKey = "interview-lab.history.v1";
 const settingsKey = "interview-lab.settings.v1";
@@ -108,6 +108,30 @@ describe("loadSettings", () => {
     expect(persisted.llmProfiles[0].health).toMatchObject({ status: "error", testedAt: "2026-08-18T08:00:00.000Z" });
     expect(healthMessage).not.toContain(credential);
     expect(healthMessage).toContain("********");
+  });
+
+  it("redacts sensitive values inside custom request headers", async () => {
+    const values = setStoredSettings(null);
+    const settings = defaultSettings();
+    settings.asr.extraHeaders = JSON.stringify({ Authorization: "Bearer asr-header-secret", "X-Trace": "trace-value" });
+    settings.llmProfiles[0].extraHeaders = JSON.stringify({ "X-API-Key": "llm-header-secret", "X-Trace": "trace-value" });
+
+    await saveSettings(settings);
+
+    const persisted = JSON.parse(values.get(settingsKey) || "{}") as typeof settings;
+    expect(persisted.asr.extraHeaders).not.toContain("asr-header-secret");
+    expect(persisted.asr.extraHeaders).toContain("********");
+    expect(persisted.asr.extraHeaders).toContain("trace-value");
+    expect(persisted.llmProfiles[0].extraHeaders).not.toContain("llm-header-secret");
+    expect(persisted.llmProfiles[0].extraHeaders).toContain("********");
+  });
+
+  it("restores masked header values from the local Stronghold copy", () => {
+    const persisted = JSON.stringify({ Authorization: "********", "X-Trace": "trace-value" });
+    const local = JSON.stringify({ Authorization: "Bearer local-secret", "X-Trace": "trace-value" });
+
+    expect(mergeStoredHeaderConfig(persisted, local)).toBe(JSON.stringify({ Authorization: "Bearer local-secret", "X-Trace": "trace-value" }, null, 2));
+    expect(mergeStoredHeaderConfig(persisted, "")).toBe(JSON.stringify({ "X-Trace": "trace-value" }, null, 2));
   });
 
   it("writes an imported snapshot as a complete browser-preview unit", async () => {

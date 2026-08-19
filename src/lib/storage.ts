@@ -1,5 +1,5 @@
 import { isTauri, invoke } from "@tauri-apps/api/core";
-import { sanitizeLlmError } from "./llm";
+import { sanitizeHeaderConfig, sanitizeLlmError } from "./llm";
 import type { AnswerFramework, AppSettings, AsrPreset, AsrProviderConfig, InterviewFocus, InterviewSession, LlmProfile, MaterialContext, SessionRecord } from "../types";
 import { createAsrPreset, createDefaultAsrConfig, createDefaultLlmProfile } from "../types";
 
@@ -343,21 +343,82 @@ function hasLegacyData() {
 
 function redactSettings(settings: AppSettings): AppSettings {
   const asrProfiles = Object.fromEntries(
-    Object.entries(settings.asrProfiles).map(([preset, profile]) => [preset, profile ? { ...profile, apiKey: "" } : profile]),
+    Object.entries(settings.asrProfiles).map(([preset, profile]) => [preset, profile ? { ...profile, apiKey: "", extraHeaders: sanitizeHeaderConfig(profile.extraHeaders) } : profile]),
   ) as AppSettings["asrProfiles"];
   return {
     ...settings,
-    asr: { ...settings.asr, apiKey: "" },
+    asr: { ...settings.asr, apiKey: "", extraHeaders: sanitizeHeaderConfig(settings.asr.extraHeaders) },
     asrProfiles,
-    llmProfiles: settings.llmProfiles.map((profile) => ({ ...profile, apiKey: "", health: normalizeLlmHealth(profile.health, profile.apiKey) })),
+    llmProfiles: settings.llmProfiles.map((profile) => ({ ...profile, apiKey: "", extraHeaders: sanitizeHeaderConfig(profile.extraHeaders), health: normalizeLlmHealth(profile.health, profile.apiKey) })),
   };
 }
 
+const MASKED_SECRET_PATTERN = /\*{4,}/;
+
+function hasMaskedSecret(value: unknown) {
+  return typeof value === "string" && MASKED_SECRET_PATTERN.test(value);
+}
+
+/** Remove placeholders from a persisted fallback so they are never sent as real headers. */
+function safeHeaderFallback(raw?: string) {
+  if (!raw?.trim()) return "";
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return hasMaskedSecret(raw) ? "" : raw;
+    const entries = Object.entries(parsed as Record<string, unknown>)
+      .filter(([key, value]) => !hasMaskedSecret(key) && !hasMaskedSecret(value));
+    return JSON.stringify(Object.fromEntries(entries), null, 2);
+  } catch {
+    return hasMaskedSecret(raw) ? "" : raw;
+  }
+}
+
+/** Merge local Stronghold header values into an imported or backed-up masked config. */
+export function mergeStoredHeaderConfig(persisted: string | undefined, stored: string | undefined) {
+  const localStored = stored && !hasMaskedSecret(stored) ? stored : "";
+  if (!localStored.trim()) return safeHeaderFallback(persisted);
+  if (!persisted?.trim()) return localStored;
+  try {
+    const imported = JSON.parse(persisted) as unknown;
+    const local = JSON.parse(localStored) as unknown;
+    if (!imported || typeof imported !== "object" || Array.isArray(imported) || !local || typeof local !== "object" || Array.isArray(local)) {
+      return hasMaskedSecret(persisted) ? localStored : persisted;
+    }
+    const localEntries = local as Record<string, unknown>;
+    const merged = Object.fromEntries(Object.entries(imported as Record<string, unknown>).map(([key, value]) => [
+      key,
+      hasMaskedSecret(value) && Object.prototype.hasOwnProperty.call(localEntries, key) ? localEntries[key] : value,
+    ]));
+    return JSON.stringify(merged, null, 2);
+  } catch {
+    return hasMaskedSecret(persisted) ? localStored : persisted;
+  }
+}
+
+function llmHeaderSecretKey(profileId: string) {
+  return `llm:headers:${profileId}`;
+}
+
+function asrHeaderSecretKey(preset: string) {
+  return `asr:headers:${preset}`;
+}
+
+function secretValue(value: string | undefined) {
+  return value && !hasMaskedSecret(value) ? value : "";
+}
+
 function secretEntries(settings: AppSettings) {
-  const entries: Array<{ key: string; value: string }> = settings.llmProfiles.map((profile) => ({ key: `llm:${profile.id}`, value: profile.apiKey || "" }));
-  entries.push({ key: "asr:active", value: settings.asr.apiKey || "" });
+  const entries: Array<{ key: string; value: string }> = settings.llmProfiles.flatMap((profile) => [
+    { key: `llm:${profile.id}`, value: secretValue(profile.apiKey) },
+    { key: llmHeaderSecretKey(profile.id), value: secretValue(profile.extraHeaders) },
+  ]);
+  entries.push({ key: "asr:active", value: secretValue(settings.asr.apiKey) });
+  entries.push({ key: asrHeaderSecretKey("active"), value: secretValue(settings.asr.extraHeaders) });
   for (const [preset, profile] of Object.entries(settings.asrProfiles)) {
-    if (profile) entries.push({ key: `asr:${preset}`, value: profile.apiKey || "" });
+    if (profile) {
+      entries.push({ key: `asr:${preset}`, value: secretValue(profile.apiKey) });
+      entries.push({ key: asrHeaderSecretKey(preset), value: secretValue(profile.extraHeaders) });
+    }
   }
   return entries;
 }
@@ -381,13 +442,24 @@ async function readSecret(context: PersistentContext, key: string) {
 }
 
 async function hydrateSecrets(context: PersistentContext, settings: AppSettings): Promise<AppSettings> {
-  const llmProfiles = await Promise.all(settings.llmProfiles.map(async (profile) => ({ ...profile, apiKey: await readSecret(context, `llm:${profile.id}`) })));
+  const llmProfiles = await Promise.all(settings.llmProfiles.map(async (profile) => ({
+    ...profile,
+    apiKey: await readSecret(context, `llm:${profile.id}`),
+    extraHeaders: mergeStoredHeaderConfig(profile.extraHeaders, await readSecret(context, llmHeaderSecretKey(profile.id))),
+  })));
   const asrProfiles: AppSettings["asrProfiles"] = {};
   for (const [preset, profile] of Object.entries(settings.asrProfiles)) {
-    if (profile) asrProfiles[preset as AsrPreset] = { ...profile, apiKey: await readSecret(context, `asr:${preset}`) };
+    if (profile) {
+      asrProfiles[preset as AsrPreset] = {
+        ...profile,
+        apiKey: await readSecret(context, `asr:${preset}`),
+        extraHeaders: mergeStoredHeaderConfig(profile.extraHeaders, await readSecret(context, asrHeaderSecretKey(preset))),
+      };
+    }
   }
   const activeApiKey = await readSecret(context, "asr:active");
-  return { ...settings, llmProfiles, asrProfiles, asr: { ...settings.asr, apiKey: activeApiKey } };
+  const activeHeaders = mergeStoredHeaderConfig(settings.asr.extraHeaders, await readSecret(context, asrHeaderSecretKey("active")));
+  return { ...settings, llmProfiles, asrProfiles, asr: { ...settings.asr, apiKey: activeApiKey, extraHeaders: activeHeaders } };
 }
 
 async function writeSecrets(context: PersistentContext, settings: AppSettings) {
@@ -608,6 +680,10 @@ async function createTauriContext(): Promise<PersistentContext> {
       await upsertDocument(context, "settings", redactSettings(hydratedSettings));
       await upsertDocument(context, "materials", storedMaterials);
       await replaceHistory(context, storedHistory);
+    } else if (settingsRows.length && settingsHealthy) {
+      // Migrate any pre-0.2.3 custom header values into Stronghold and keep SQLite redacted.
+      await writeSecrets(context, hydratedSettings);
+      await upsertDocument(context, "settings", redactSettings(hydratedSettings));
     }
   }
   await upsertDocument(context, "runtime", { state: "running", startedAt });

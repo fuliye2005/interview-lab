@@ -7,14 +7,36 @@ export function sanitizeAnswerText(text: string) {
 }
 
 /** Keep provider diagnostics useful without allowing credentials into persisted messages. */
-export function sanitizeLlmError(error: unknown, credential = "") {
-  let message = error instanceof Error ? error.message : typeof error === "string" ? error : "连接测试失败";
+export function sanitizeSecretText(raw: string, credential = "") {
+  let message = raw;
   if (credential.trim()) message = message.split(credential).join("********");
   return message
     .replace(/Bearer\s+[^\s,;"']+/gi, "Bearer ********")
     .replace(/((?:api[_-]?key|access[_-]?token|secret|token)\s*[:=]\s*["']?)[^\s,;}"']+/gi, "$1********")
     .replace(/\b(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{12,}|AIza[A-Za-z0-9_-]{16,}|xox[baprs]-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{16})\b/g, "********")
     .slice(0, 600);
+}
+
+export function sanitizeLlmError(error: unknown, credential = "") {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "连接测试失败";
+  return sanitizeSecretText(message, credential);
+}
+
+export function sanitizeHeaderConfig(raw: string | undefined, reveal = false) {
+  if (!raw?.trim()) return "";
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return reveal ? raw : sanitizeSecretText(raw);
+    const sensitive = /authorization|api[_-]?key|access[_-]?token|token|secret|password|cookie/i;
+    const sanitized = Object.fromEntries(Object.entries(parsed as Record<string, unknown>).map(([key, value]) => {
+      if (!reveal && sensitive.test(key)) return [key, "********"];
+      if (!reveal && typeof value === "string") return [key, sanitizeSecretText(value)];
+      return [key, value];
+    }));
+    return JSON.stringify(sanitized, null, 2);
+  } catch {
+    return reveal ? raw : sanitizeSecretText(raw);
+  }
 }
 
 export function selectInterviewContext(previousTurns: InterviewTurn[], contextWindow = 8000) {
