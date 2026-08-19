@@ -40,7 +40,7 @@
 
 ## 当前工作树
 
-当前分支为 `main`，代码提交 `7e1e67f`（配置/材料事务写入和版本 `0.2.18`）已在本地完成，记忆区更新待推送；托盘悬浮入口代码提交为 `0bbc5d6`。`0.2.18` EXE 已复制到 `D:\Interview Lab\tauri-app.exe`，文件版本为 `0.2.18`，SHA-256 为 `18AFDB5FFF496C17BDC2B2A56C13E362ED6E98BE716FBA7AD07011D664629520`，构建内置提交为 `7e1e67f`。桌面已有的 `Interview Lab 0.2.8 安装包.exe/.msi` 未被覆盖，本批没有生成安装包。普通 `main` 推送只运行 EXE job；安装包 job 只有手动触发工作流并勾选 `build_installer` 才会运行。4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
+当前分支为 `main`，代码提交 `7e1e67f`（配置/材料事务写入和版本 `0.2.18`）与记忆区提交 `5549093` 均已推送；托盘悬浮入口代码提交为 `0bbc5d6`。`0.2.18` EXE 已复制到 `D:\Interview Lab\tauri-app.exe`，文件版本为 `0.2.18`，SHA-256 为 `18AFDB5FFF496C17BDC2B2A56C13E362ED6E98BE716FBA7AD07011D664629520`，构建内置提交为 `7e1e67f`。桌面已有的 `Interview Lab 0.2.8 安装包.exe/.msi` 未被覆盖，本批没有生成安装包。普通 `main` 推送只运行 EXE job；安装包 job 只有手动触发工作流并勾选 `build_installer` 才会运行。4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
 
 - 安全备份 JSON 导出/导入，导出内容明确排除 API Key，导入保留本机已有凭证。
 - 存储诊断：SQLite/localStorage、数据版本、Stronghold、备份数量和 SQLite quick check。
