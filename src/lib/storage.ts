@@ -82,6 +82,23 @@ export interface StorageDiagnostics {
   recoveryMessage?: string;
 }
 
+export function classifyQuickCheckResult(value: unknown): StorageDiagnostics["integrity"] {
+  const values: unknown[] = [];
+  const collect = (entry: unknown, depth = 0) => {
+    if (depth > 4 || entry === null || entry === undefined) return;
+    if (typeof entry === "object") {
+      if (Array.isArray(entry)) entry.forEach((item) => collect(item, depth + 1));
+      else Object.values(entry as Record<string, unknown>).forEach((item) => collect(item, depth + 1));
+      return;
+    }
+    values.push(entry);
+  };
+  collect(value);
+  const normalized = values.map((item) => String(item).trim().toLowerCase()).filter(Boolean);
+  if (!normalized.length) return "unknown";
+  return normalized.every((item) => item === "ok" || item === "ok.") ? "ok" : "error";
+}
+
 interface RuntimeMarker {
   state: "running" | "clean";
   startedAt: string;
@@ -890,9 +907,8 @@ export async function getStorageDiagnostics(): Promise<StorageDiagnostics> {
       if (migrationStatus === "current") migrationStatus = "unknown";
     }
     try {
-      const rows = await context.db.select<Array<Record<string, unknown>>>("PRAGMA quick_check");
-      const result = Object.values(rows[0] ?? {})[0];
-      integrity = result === "ok" ? "ok" : "error";
+      const rows = await context.db.select<unknown>("PRAGMA quick_check");
+      integrity = classifyQuickCheckResult(rows);
     } catch {
       integrity = "unknown";
     }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { classifyDatabaseRecoveryError, createExternalSnapshot, createSafeDataBundle, defaultSettings, isLikelyDatabaseCorruption, loadHistory, loadSettings, mergeStoredHeaderConfig, parseExternalSnapshot, parseSafeDataBundle, saveSettings, saveSnapshot } from "./storage";
+import { classifyDatabaseRecoveryError, classifyQuickCheckResult, createExternalSnapshot, createSafeDataBundle, defaultSettings, isLikelyDatabaseCorruption, loadHistory, loadSettings, mergeStoredHeaderConfig, parseExternalSnapshot, parseSafeDataBundle, saveSettings, saveSnapshot } from "./storage";
 
 const historyKey = "interview-lab.history.v1";
 const settingsKey = "interview-lab.settings.v1";
@@ -250,5 +250,20 @@ describe("external recovery snapshots", () => {
     expect(parseExternalSnapshot(JSON.stringify({ ...snapshot, version: 1 }))).toBeUndefined();
     expect(parseExternalSnapshot(JSON.stringify({ ...snapshot, format: "other" }))).toBeUndefined();
     expect(parseExternalSnapshot("not-json")).toBeUndefined();
+  });
+});
+
+describe("SQLite quick_check diagnostics", () => {
+  it("accepts the common Tauri SQL row shapes", () => {
+    expect(classifyQuickCheckResult([{ quick_check: "ok" }])).toBe("ok");
+    expect(classifyQuickCheckResult([{ "quick_check(10)": "ok" }])).toBe("ok");
+    expect(classifyQuickCheckResult(["ok"])).toBe("ok");
+  });
+
+  it("does not turn an empty or malformed result into a false healthy state", () => {
+    expect(classifyQuickCheckResult([])).toBe("unknown");
+    expect(classifyQuickCheckResult(undefined)).toBe("unknown");
+    expect(classifyQuickCheckResult([{ quick_check: "database disk image is malformed" }])).toBe("error");
+    expect(classifyQuickCheckResult([{ quick_check: "ok" }, { quick_check: "row 2 corruption" }])).toBe("error");
   });
 });
