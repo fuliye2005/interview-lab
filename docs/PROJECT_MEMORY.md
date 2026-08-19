@@ -37,7 +37,7 @@
 
 ## 当前工作树
 
-当前分支为 `main`，最近已提交版本为 `0.2.14`；当前工作树正在准备 `0.2.15` 配置编辑批次。当前可用 EXE 仍为 `0.2.14`，已复制到 `D:\Interview Lab\tauri-app.exe`，文件版本为 `0.2.14`，SHA-256 为 `D4A9F26347C3DBACF02A99F6B40E0AE851185AC15940A7C032D6DC4897760F66`。桌面已有的 `Interview Lab 0.2.8 安装包.exe/.msi` 未被覆盖，本批没有生成安装包或新 EXE。普通 `main` 推送只运行 EXE job；安装包 job 只有手动触发工作流并勾选 `build_installer` 才会运行。4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
+当前分支为 `main`，`0.2.15` 配置编辑批次已提交为 `75893a4` 并推送到 `origin/main`。当前可用 EXE 已复制到 `D:\Interview Lab\tauri-app.exe`，文件版本为 `0.2.15`，SHA-256 为 `43DBA99D7CF95345C7CFE55CAA46A167C449D12B69548665A1930F18BEDC0606`。桌面已有的 `Interview Lab 0.2.8 安装包.exe/.msi` 未被覆盖，本批没有生成安装包。普通 `main` 推送只运行 EXE job；安装包 job 只有手动触发工作流并勾选 `build_installer` 才会运行。4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
 
 - 安全备份 JSON 导出/导入，导出内容明确排除 API Key，导入保留本机已有凭证。
 - 存储诊断：SQLite/localStorage、数据版本、Stronghold、备份数量和 SQLite quick check。
@@ -72,7 +72,7 @@
 3. 进行一次真实数据库损坏演练，并确认组件级恢复不会覆盖正常配置或 Stronghold 凭证。
 4. 做一次 30 轮以上真实连续对话运行时验收；单元测试已覆盖上下文选择，但不能替代真实模型流式链路。
 5. 主窗口 `760×560` 暂不作为当前验收重点；多显示器、麦克风双通道和本地 ASR 已按用户决定取消，不再列为交付项。
-6. 本次工作点：`0.2.15` 已完成 JSON/TOML Provider 编辑和脱敏回写代码，前端构建、65 项测试与 `cargo check` 通过；尚未生成新 EXE，安装包按用户要求不自动生成。每次后续发布继续递增版本号，不重复使用旧版本号。
+6. 本次工作点：`0.2.15` 已完成 JSON/TOML Provider 编辑和脱敏回写代码，前端构建、65 项测试、`cargo check` 和 EXE-only release 构建通过；新 EXE 已复制到 `D:\Interview Lab\tauri-app.exe` 并推送提交 `75893a4`，安装包按用户要求不自动生成。每次后续发布继续递增版本号，不重复使用旧版本号。
 
 ## 第一性原理审查清单
 
