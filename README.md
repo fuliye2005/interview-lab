@@ -49,7 +49,8 @@ npm run tauri dev
 
 ```powershell
 npm run build
-npm run tauri build -- --no-bundle
+npm run tauri:build:exe
 ```
 
-`--no-bundle` 只生成 EXE；生成 MSI 还需要 WiX 工具链下载完成。
+`npm run tauri:build:exe` 只生成 `src-tauri/target/release/tauri-app.exe`，不会生成安装包。
+只有明确需要安装包时才运行 `npm run tauri:build:installer`；该命令才会生成 NSIS/MSI。

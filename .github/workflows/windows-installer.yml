@@ -1,4 +1,4 @@
-name: Build Windows installer
+name: Build Windows artifacts
 
 on:
   push:
@@ -7,12 +7,18 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      build_installer:
+        description: Generate NSIS/MSI installers
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  build-exe:
     runs-on: windows-latest
 
     steps:
@@ -31,8 +37,38 @@ jobs:
       - name: Install JavaScript dependencies
         run: npm ci
 
-      - name: Build Tauri installers
-        run: npm run tauri build
+      - name: Build release EXE only
+        run: npm run tauri:build:exe
+
+      - name: Upload release EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: interview-lab-windows-exe
+          path: src-tauri/target/release/tauri-app.exe
+          if-no-files-found: error
+
+  build-installer:
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.build_installer == true) }}
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Build Windows installers
+        run: npm run tauri:build:installer
 
       - name: Package Windows installers
         shell: pwsh
