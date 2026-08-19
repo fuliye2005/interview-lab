@@ -1,6 +1,6 @@
 # Interview Lab 项目记忆区
 
-更新时间：2026-08-19 12:46
+更新时间：2026-08-19 12:52
 
 这不是用户数据或密钥文件，只记录产品不变量、实现证据、未验证风险和下一检查点。任何继续工作前先读取本文件，并以当前工作树、测试输出和 release 构建为准。
 
@@ -30,7 +30,7 @@
 - `a036025`：同一会话内的暂停/继续控制，暂停期间系统音频排空但不发送给 ASR。
 - 当前批次：增加脱敏外部快照、损坏 SQLite 主文件及 WAL/SHM 伴随文件隔离、原子快照写入和外部快照事务恢复；正常退出快照排队在待处理写入之后，并只对明确的 SQLite 损坏错误执行隔离；模型 Provider 健康状态、启动运行环境诊断、完整快照事务写入和数据 schema v2 迁移已接入。
 
-最近一次已验证结果：57 项 Vitest 通过、前端生产构建通过、`cargo check` 通过；SQLite v2 迁移编译通过；`0.2.7` Tauri release、NSIS 和 MSI 构建均完成；release EXE 已在本机启动，标题为 `Interview Lab · 实时语音测试台`，窗口可见且进程响应正常。
+最近一次已验证结果：57 项 Vitest 通过、前端生产构建通过、`cargo check` 通过；SQLite v2 迁移编译通过；`0.2.7` Tauri release、NSIS 和 MSI 构建均完成；release EXE 已在本机启动，标题为 `Interview Lab · 实时语音测试台`，窗口可见且进程响应正常；Windows UI Automation 识别为 `Tauri Window` + `WRY_WEBVIEW`，未出现浏览器地址栏或标签页。
 
 ## 当前工作树
 
