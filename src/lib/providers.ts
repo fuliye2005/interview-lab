@@ -110,8 +110,11 @@ export function applyLlmProviderPreset(profile: LlmProfile, id: LlmProviderPrese
     baseUrl: preset.baseUrl,
     protocol: preset.protocol,
     model: profile.model || preset.defaultModel,
+    usagePath: profile.usagePath || (id === "openrouter" ? "/key" : ""),
     contextWindow: profile.contextWindow && profile.contextWindow !== 8000 ? profile.contextWindow : preset.contextWindow,
     modelOptions: [],
     health: undefined,
+    healthHistory: undefined,
+    usage: undefined,
   };
 }

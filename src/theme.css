@@ -241,6 +241,7 @@ button { white-space: nowrap; }
 .provider-card-actions button { padding: 5px 8px; font-size: 11px; box-shadow: none; }
 .provider-card-actions .provider-active-toggle { margin: 0 4px 0 0; color: #a9b8d3; font-size: 11px; white-space: nowrap; }
 .provider-card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; padding: 0 12px 10px 29px; color: #72839e; font-size: 10px; }
+.provider-health-history { margin: 0 12px 10px 29px; color: #8292ad; font-size: 10px; }.provider-health-history summary { cursor: pointer; color: #9badd0; }.provider-health-history > div { display: grid; gap: 3px; margin-top: 6px; padding: 7px 8px; border-left: 2px solid #2e4671; background: #0d1728; }.provider-health-history span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .provider-card-meta span { overflow: hidden; max-width: 100%; text-overflow: ellipsis; white-space: nowrap; }.provider-card-meta .provider-diagnostic-hint { display: block; overflow: hidden; margin-top: 2px; color: #e9c77a; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .provider-card-meta span:first-child { flex: 1 1 260px; }
 .provider-card-editor { display: grid; gap: 10px; padding: 12px; border-top: 1px solid #263650; background: #0e1727; }

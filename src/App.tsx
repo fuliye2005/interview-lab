@@ -8,7 +8,7 @@ import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { GenericAsrSession } from "./lib/asr";
 import { ASR_PROVIDER_PRESETS, asrConfigPreview, asrConfigReady, asrMissingFields, asrProviderLabel, classifyAsrError, testAsrConnection, testAsrFinalText } from "./lib/asr-providers";
 import { BUILD_INFO } from "./lib/build-info";
-import { buildInterviewPrompt, listLlmModels, sanitizeAnswerText, sanitizeHeaderConfig, sanitizeLlmError, selectInterviewContext, streamLlm, testLlmConnection } from "./lib/llm";
+import { buildInterviewPrompt, fetchLlmUsage, listLlmModels, sanitizeAnswerText, sanitizeHeaderConfig, sanitizeLlmError, selectInterviewContext, streamLlm, testLlmConnection } from "./lib/llm";
 import { extractMaterialText, makeCandidateDraft, makeJobDraft } from "./lib/materials";
 import { applyLlmProviderPreset, LLM_PROVIDER_PRESETS, providerLabel, providerRequiresKey } from "./lib/providers";
 import { importRepository as importRepositoryMaterial } from "./lib/repository";
@@ -16,7 +16,7 @@ import { detectRuntimeEnvironment } from "./lib/runtime";
 import { formatShortcut, shortcutKeyToken, toGlobalShortcut } from "./lib/shortcut";
 import { clearHistory, createSafeDataBundle, defaultSettings, emptyMaterials, getStorageDiagnostics, initializeStorage, loadHistory, loadMaterials, loadSettings, markCleanShutdown, mergeStoredHeaderConfig, parseSafeDataBundle, restoreLatestBackup, saveHistory, saveMaterials, saveSettings, saveSnapshot } from "./lib/storage";
 import type { StorageDiagnostics } from "./lib/storage";
-import type { AnswerFramework, AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, InterviewContextTurn, InterviewFocus, InterviewSession, InterviewTurn, LlmProfile, LlmProviderPresetId, MaterialContext, OverlayLayout, OverlaySettings, SessionRecord, WheelScrollSettings } from "./types";
+import type { AnswerFramework, AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, InterviewContextTurn, InterviewFocus, InterviewSession, InterviewTurn, LlmHealth, LlmProfile, LlmProviderPresetId, MaterialContext, OverlayLayout, OverlaySettings, SessionRecord, WheelScrollSettings } from "./types";
 import { ANSWER_FRAMEWORK_LABELS, createAsrPreset, createDefaultLlmProfile, INTERVIEW_FOCUS_LABELS } from "./types";
 import "./App.css";
 import "./theme.css";
@@ -26,6 +26,7 @@ type SessionMode = "idle" | "all" | "asr" | "answer";
 type TestMode = "all" | "asr" | "answer";
 type SessionStage = "idle" | "manual" | "listening" | "finalizing" | "answering" | "complete";
 type ProfileTestState = { status: "idle" | "testing" | "success" | "error"; testedAt?: string; latencyMs?: number; firstTokenMs?: number; message?: string };
+type ProfileUsageState = { status: "idle" | "loading" | "success" | "error"; message?: string };
 type ProfileSort = "active" | "name" | "updated";
 type ProfileModelState = { status: "idle" | "loading" | "success" | "error"; models: string[]; message?: string };
 type AsrProfileTestState = { status: "idle" | "testing" | "success" | "error"; mode?: "connection" | "final"; latencyMs?: number; finalText?: string; errorKind?: string; message?: string; hint?: string };
@@ -33,6 +34,11 @@ type LlmEditorTab = "basic" | "parameters" | "advanced" | "raw";
 
 function persistedProfileTest(profile: Pick<LlmProfile, "health">): ProfileTestState {
   return profile.health ? { ...profile.health } : { status: "idle" };
+}
+
+function formatHealthEntry(health: LlmHealth) {
+  if (health.status === "error") return `${new Date(health.testedAt).toLocaleString()} · 失败${health.message ? ` · ${health.message}` : ""}`;
+  return `${new Date(health.testedAt).toLocaleString()} · ${health.latencyMs ?? "—"} ms · 首 Token ${health.firstTokenMs ?? "—"} ms`;
 }
 type OverlayCommand = { command: "start" | "submit" | "stop" | "pause" | "stop-generation" | "regenerate" | "hide"; testMode?: TestMode };
 type OverlayState = {
@@ -136,6 +142,7 @@ function profileConfigPreview(profile: LlmProfile, focus: InterviewFocus, reveal
 provider = "${providerLabel(profile)}"
 base_url = "${profile.baseUrl || "未填写"}"
 protocol = "${profile.protocol}"
+usage_path = "${profile.usagePath || "未配置"}"
 context_window = ${profile.contextWindow || 8000}
 answer_detail = "${profile.answerDetail}"
 reasoning_effort = "${profile.reasoningEffort}"
@@ -152,6 +159,7 @@ function profileRawConfig(profile: LlmProfile, focus: InterviewFocus, revealKey 
     model: profile.model,
     protocol: profile.protocol,
     request_path: profile.requestPath || "",
+    usage_path: profile.usagePath || "",
     context_window: formatContextWindow(profile.contextWindow || 8000),
     answer_detail: profile.answerDetail,
     reasoning_effort: profile.reasoningEffort,
@@ -334,6 +342,7 @@ function App() {
   const [selectedHistorySessionId, setSelectedHistorySessionId] = useState<string | undefined>();
   const [historyQuery, setHistoryQuery] = useState("");
   const [profileTests, setProfileTests] = useState<Record<string, ProfileTestState>>({});
+  const [profileUsages, setProfileUsages] = useState<Record<string, ProfileUsageState>>({});
   const [profileModelStates, setProfileModelStates] = useState<Record<string, ProfileModelState>>({});
   const [asrProfileTests, setAsrProfileTests] = useState<Record<string, AsrProfileTestState>>({});
   const [expandedAsrPresetIds, setExpandedAsrPresetIds] = useState<AsrPreset[]>([]);
@@ -483,6 +492,25 @@ function App() {
     }).then((cleanup) => { unlisten = cleanup; });
     return () => unlisten();
   }, [desktopRuntime, isOverlayWindow]);
+  useEffect(() => {
+    if (!desktopRuntime || isOverlayWindow || !storageReady) return;
+    const payload = {
+      active_id: settings.activeLlmProfileId,
+      profiles: settings.llmProfiles.slice(0, 20).map((profile) => ({ id: profile.id, name: profile.name || "未命名模型", model: profile.model || "" })),
+    };
+    void emit("tray-update-profiles", payload).catch(() => undefined);
+  }, [desktopRuntime, isOverlayWindow, storageReady, settings.activeLlmProfileId, settings.llmProfiles]);
+  useEffect(() => {
+    if (!desktopRuntime || isOverlayWindow) return;
+    let unlisten: () => void = () => {};
+    void listen<string>("tray-profile-select", (event) => {
+      const profile = settings.llmProfiles.find((item) => item.id === event.payload);
+      if (!profile) return;
+      setSettings((state) => ({ ...state, activeLlmProfileId: profile.id }));
+      setNotice(`已从托盘切换到：${profile.name}`);
+    }).then((cleanup) => { unlisten = cleanup; });
+    return () => unlisten();
+  }, [desktopRuntime, isOverlayWindow, settings.llmProfiles]);
   useEffect(() => { if (!repositoryUrl && materials.repository?.url) setRepositoryUrl(materials.repository.url); }, [materials.repository?.url, repositoryUrl]);
   useEffect(() => { questionRef.current = question; }, [question]);
   useEffect(() => {
@@ -629,7 +657,7 @@ function App() {
     }
   }
   function duplicateProfile(profile: LlmProfile) {
-    const copy: LlmProfile = { ...profile, id: crypto.randomUUID(), name: `${profile.name} 副本`, health: undefined };
+    const copy: LlmProfile = { ...profile, id: crypto.randomUUID(), name: `${profile.name} 副本`, health: undefined, healthHistory: undefined, usage: undefined };
     setSettings((state) => ({ ...state, llmProfiles: [...state.llmProfiles, copy], activeLlmProfileId: copy.id }));
     setExpandedProfileIds((ids) => ids.includes(copy.id) ? ids : [...ids, copy.id]);
     setNotice(`已复制模型配置：${copy.name}`);
@@ -647,6 +675,7 @@ function App() {
     }));
     setProfileModelStates((state) => ({ ...state, [profileId]: { status: "idle", models: [] } }));
     setProfileTests((state) => { const next = { ...state }; delete next[profileId]; return next; });
+    setProfileUsages((state) => { const next = { ...state }; delete next[profileId]; return next; });
     setNotice("已应用 Provider 预配置；现有 Key 和自定义回答策略会保留。保存后即可在本机复用。");
   }
   function removeProfile(profileId: string) {
@@ -658,6 +687,7 @@ function App() {
     setExpandedProfileIds((ids) => ids.filter((id) => id !== profileId));
     setProfileModelStates((state) => { const next = { ...state }; delete next[profileId]; return next; });
     setProfileTests((state) => { const next = { ...state }; delete next[profileId]; return next; });
+    setProfileUsages((state) => { const next = { ...state }; delete next[profileId]; return next; });
     setNotice("已移除模型配置；当前启用配置未受影响。");
   }
   function moveProfile(profileId: string, direction: -1 | 1) {
@@ -692,13 +722,27 @@ function App() {
       const testedAt = new Date().toISOString();
       const health = { status: "success" as const, testedAt, ...result };
       setProfileTests((state) => ({ ...state, [profile.id]: health }));
-      setSettings((state) => ({ ...state, llmProfiles: state.llmProfiles.map((item) => item.id === profile.id ? { ...item, health } : item) }));
+      setSettings((state) => ({ ...state, llmProfiles: state.llmProfiles.map((item) => item.id === profile.id ? { ...item, health, healthHistory: [health, ...(item.healthHistory || []).filter((entry) => entry.testedAt !== health.testedAt)].slice(0, 12) } : item) }));
     } catch (error) {
       const testedAt = new Date().toISOString();
       const message = sanitizeLlmError(error, profile.apiKey);
       const health = { status: "error" as const, testedAt, message };
       setProfileTests((state) => ({ ...state, [profile.id]: health }));
-      setSettings((state) => ({ ...state, llmProfiles: state.llmProfiles.map((item) => item.id === profile.id ? { ...item, health } : item) }));
+      setSettings((state) => ({ ...state, llmProfiles: state.llmProfiles.map((item) => item.id === profile.id ? { ...item, health, healthHistory: [health, ...(item.healthHistory || []).filter((entry) => entry.testedAt !== health.testedAt)].slice(0, 12) } : item) }));
+    }
+  }
+  async function queryProfileUsage(profile: LlmProfile) {
+    setProfileUsages((state) => ({ ...state, [profile.id]: { status: "loading" } }));
+    try {
+      const result = await fetchLlmUsage(profile);
+      const usage = { status: "success" as const, fetchedAt: new Date().toISOString(), summary: result.summary };
+      setProfileUsages((state) => ({ ...state, [profile.id]: { status: "success", message: result.summary } }));
+      setSettings((state) => ({ ...state, llmProfiles: state.llmProfiles.map((item) => item.id === profile.id ? { ...item, usage } : item) }));
+      setNotice(`${profile.name} 用量查询成功。`);
+    } catch (error) {
+      const message = sanitizeLlmError(error, profile.apiKey);
+      setProfileUsages((state) => ({ ...state, [profile.id]: { status: "error", message } }));
+      setSettings((state) => ({ ...state, llmProfiles: state.llmProfiles.map((item) => item.id === profile.id ? { ...item, usage: { status: "error", fetchedAt: new Date().toISOString(), message } } : item) }));
     }
   }
   function log(raw: string) { if (settings.asr.debug) setDebug((items) => [raw.slice(0, 1000), ...items].slice(0, 30)); }
@@ -1279,7 +1323,7 @@ function App() {
       {tab === "materials" && <section className="materials-grid"><div className="panel"><div className="panel-head"><div><div className="panel-kicker">CANDIDATE CONTEXT</div><h2>候选人材料</h2><p>可选：PDF、DOCX、TXT 或直接粘贴。</p></div><button onClick={() => importMaterial("resume")}>导入简历</button></div><label>简历原文</label><textarea rows={10} value={materials.resume} onChange={(event) => setMaterials((state) => ({ ...state, resume: event.target.value, confirmed: false }))} /><label>个人补充资料</label><textarea rows={5} value={materials.personalNotes} onChange={(event) => setMaterials((state) => ({ ...state, personalNotes: event.target.value, confirmed: false }))} /></div><div className="panel"><div className="panel-head"><div><div className="panel-kicker">TARGET ROLE</div><h2>目标岗位</h2><p>可选：一次会话仅使用一份 JD。</p></div><button onClick={() => importMaterial("jobDescription")}>导入 JD</button></div><label>岗位描述</label><textarea rows={10} value={materials.jobDescription} onChange={(event) => setMaterials((state) => ({ ...state, jobDescription: event.target.value, confirmed: false }))} /><button className="primary full" onClick={draftSummaries}>生成可编辑摘要草稿</button></div><div className="panel full-width context-panel"><div className="panel-head"><div><div className="panel-kicker">READY FOR LLM</div><h2>确认后的 LLM 上下文</h2><p>只有确认后的摘要才会参与回答，避免模型误用未检查的信息。</p></div><div className="context-actions"><span className={`context-state ${materialClass}`}><i />{materialLabel}</span><button className={materials.confirmed ? "success" : "primary"} onClick={() => setMaterials((state) => ({ ...state, confirmed: !state.confirmed }))}>{materials.confirmed ? "取消确认" : "确认并用于回答"}</button></div></div><div className="summary-grid"><div><label>候选人事实摘要</label><textarea rows={12} value={materials.candidateSummary} onChange={(event) => setMaterials((state) => ({ ...state, candidateSummary: event.target.value, confirmed: false }))} /></div><div><label>岗位要求摘要</label><textarea rows={12} value={materials.jobSummary} onChange={(event) => setMaterials((state) => ({ ...state, jobSummary: event.target.value, confirmed: false }))} /></div></div></div></section>}
       {tab === "materials" && <section className="panel repository-panel"><div className="panel-head"><div><div className="panel-kicker">OPEN SOURCE PROJECT</div><h2>GitHub / Gitee 仓库</h2><p>导入公开仓库的 README、目录和关键配置，用于回答项目与 Vibe Coding 经历问题。</p></div><span className={`context-state ${materials.repository?.confirmed ? "ready" : materials.repository ? "pending" : "muted"}`}><i />{materials.repository?.confirmed ? "已确认" : materials.repository ? "待确认" : "未导入"}</span></div><div className="repository-import-row"><input value={repositoryUrl} onChange={(event) => setRepositoryUrl(event.target.value)} placeholder="https://github.com/owner/repo 或 https://gitee.com/owner/repo" /><button className="primary" disabled={repositoryImporting} onClick={() => void importRepositoryContext()}>{repositoryImporting ? "导入中…" : "导入仓库"}</button></div>{materials.repository && <><div className="repository-meta"><strong>{materials.repository.name}</strong><span>{materials.repository.provider === "github" ? "GitHub" : "Gitee"} · {materials.repository.branch} · {materials.repository.fileTree.split("\n").filter(Boolean).length} 个文件</span></div><label>项目摘要（可编辑）</label><textarea rows={5} value={materials.repository.summary} onChange={(event) => setMaterials((state) => ({ ...state, repository: state.repository ? { ...state.repository, summary: event.target.value, confirmed: false } : state.repository }))} /><label>关键文件与目录（只读预览）</label><textarea className="repository-preview" readOnly rows={8} value={`${materials.repository.fileTree}\n\n${materials.repository.keyFiles}`} /><div className="context-actions repository-actions"><button className={materials.repository.confirmed ? "success" : "primary"} onClick={() => setMaterials((state) => ({ ...state, repository: state.repository ? { ...state.repository, confirmed: !state.repository.confirmed } : state.repository }))}>{materials.repository.confirmed ? "取消用于回答" : "确认并用于回答"}</button><button onClick={() => setMaterials((state) => ({ ...state, repository: undefined }))}>移除仓库</button></div></>}</section>}
       {tab === "settings" && <section className="settings-stack"><AsrProviderPanel settings={settings} asrProfileTests={asrProfileTests} expandedPresetIds={expandedAsrPresetIds} onToggleExpanded={toggleAsrPresetExpanded} onSelect={selectAsrPreset} onUpdate={updateAsrProfile} onTest={testAsrProfile} onSave={saveConfiguration} />
-        <LlmProviderPanel settings={settings} setSettings={setSettings} profileTests={profileTests} profileModelStates={profileModelStates} profileQuery={profileQuery} profileSort={profileSort} expandedProfileIds={expandedProfileIds} setProfileQuery={setProfileQuery} setProfileSort={setProfileSort} onToggleExpanded={toggleProfileExpanded} onAddPreset={addProfileFromPreset} onApplyPreset={applyProfilePreset} onDuplicate={duplicateProfile} onRemove={removeProfile} onMove={moveProfile} onTest={testProfile} onLoadModels={loadProfileModels} onInvalidateTest={(id) => setProfileTests((state) => { const next = { ...state }; delete next[id]; return next; })} onSave={saveConfiguration} />
+        <LlmProviderPanel settings={settings} setSettings={setSettings} profileTests={profileTests} profileUsages={profileUsages} profileModelStates={profileModelStates} profileQuery={profileQuery} profileSort={profileSort} expandedProfileIds={expandedProfileIds} setProfileQuery={setProfileQuery} setProfileSort={setProfileSort} onToggleExpanded={toggleProfileExpanded} onAddPreset={addProfileFromPreset} onApplyPreset={applyProfilePreset} onDuplicate={duplicateProfile} onRemove={removeProfile} onMove={moveProfile} onTest={testProfile} onUsage={queryProfileUsage} onLoadModels={loadProfileModels} onInvalidateTest={(id) => setProfileTests((state) => { const next = { ...state }; delete next[id]; return next; })} onInvalidateUsage={(id) => setProfileUsages((state) => { const next = { ...state }; delete next[id]; return next; })} onSave={saveConfiguration} />
         <div className="panel"><div className="panel-head"><div><h2>回答策略</h2><p>默认策略会用于新会话；会话页可以临时覆盖，不会改动这里的配置。</p></div></div><div className="form-grid"><Field label="面试方向" value={settings.interviewFocus} onChange={(value) => setSettings((state) => ({ ...state, interviewFocus: value as InterviewFocus }))} select={Object.entries(INTERVIEW_FOCUS_LABELS)} /><Field label="默认回答框架" value={settings.answerFramework} onChange={(value) => setSettings((state) => ({ ...state, answerFramework: value as AnswerFramework }))} select={Object.entries(ANSWER_FRAMEWORK_LABELS)} /></div></div>
         <div className="panel"><div className="panel-head"><div><h2>全局快捷键</h2><p>关闭后不会注册或响应该组快捷键；快捷键冲突时请更换组合。</p></div><label className="checkbox shortcut-toggle"><input type="checkbox" checked={settings.shortcutEnabled} onChange={(event) => setSettings((state) => ({ ...state, shortcutEnabled: event.target.checked }))} />启用快捷键</label></div><div className="shortcut-grid"><div className="shortcut-field"><span>提交当前问题</span><ShortcutRecorder value={settings.shortcut} onChange={(value) => setSettings((state) => ({ ...state, shortcut: value }))} /></div><div className="shortcut-field"><span>显示 / 隐藏悬浮窗</span><ShortcutRecorder value={settings.overlayToggleShortcut} onChange={(value) => setSettings((state) => ({ ...state, overlayToggleShortcut: value }))} /></div><div className="shortcut-field"><span>停止回答生成</span><ShortcutRecorder value={settings.stopGenerationShortcut} onChange={(value) => setSettings((state) => ({ ...state, stopGenerationShortcut: value }))} /></div><div className="shortcut-field"><span>切换点击穿透</span><ShortcutRecorder value={settings.clickThroughShortcut} onChange={(value) => setSettings((state) => ({ ...state, clickThroughShortcut: value }))} /></div></div></div>
         <OverlaySettingsPanel settings={settings.overlay} onChange={(patch) => setSettings((state) => ({ ...state, overlay: { ...state.overlay, ...patch } }))} />
@@ -1399,6 +1443,7 @@ function LlmProviderPanel({
   settings,
   setSettings,
   profileTests,
+  profileUsages,
   profileModelStates,
   profileQuery,
   profileSort,
@@ -1412,13 +1457,16 @@ function LlmProviderPanel({
   onRemove,
   onMove,
   onTest,
+  onUsage,
   onLoadModels,
   onInvalidateTest,
+  onInvalidateUsage,
   onSave,
 }: {
   settings: AppSettings;
   setSettings: Dispatch<SetStateAction<AppSettings>>;
   profileTests: Record<string, ProfileTestState>;
+  profileUsages: Record<string, ProfileUsageState>;
   profileModelStates: Record<string, ProfileModelState>;
   profileQuery: string;
   profileSort: ProfileSort;
@@ -1432,8 +1480,10 @@ function LlmProviderPanel({
   onRemove: (id: string) => void;
   onMove: (id: string, direction: -1 | 1) => void;
   onTest: (profile: LlmProfile) => void;
+  onUsage: (profile: LlmProfile) => void;
   onLoadModels: (profile: LlmProfile) => void;
   onInvalidateTest: (id: string) => void;
+  onInvalidateUsage: (id: string) => void;
   onSave: () => void;
 }) {
   const visibleProfiles = useMemo(() => {
@@ -1456,8 +1506,9 @@ function LlmProviderPanel({
   }, [profileQuery, profileSort, profileTests, settings.llmProfiles, settings.activeLlmProfileId]);
 
   function updateProfile<K extends keyof LlmProfile>(id: string, key: K, value: LlmProfile[K]) {
-    setSettings((state) => ({ ...state, llmProfiles: state.llmProfiles.map((item) => item.id === id ? { ...item, [key]: value, health: undefined } : item) }));
+    setSettings((state) => ({ ...state, llmProfiles: state.llmProfiles.map((item) => item.id === id ? { ...item, [key]: value, health: undefined, healthHistory: undefined, usage: undefined } : item) }));
     onInvalidateTest(id);
+    onInvalidateUsage(id);
   }
 
   return <div className="panel provider-manager-panel">
@@ -1477,6 +1528,7 @@ function LlmProviderPanel({
       {visibleProfiles.length === 0 && <div className="provider-empty">没有匹配的模型配置。</div>}
       {visibleProfiles.map((profile) => {
         const test = profileTests[profile.id] ?? persistedProfileTest(profile);
+        const usageState = profileUsages[profile.id] ?? { status: profile.usage?.status === "success" ? "success" as const : profile.usage?.status === "error" ? "error" as const : "idle" as const, message: profile.usage?.summary || profile.usage?.message };
         const modelState = profileModelStates[profile.id] ?? { status: "idle" as const, models: profile.modelOptions ?? [] };
         const expanded = expandedProfileIds.includes(profile.id);
         const active = profile.id === settings.activeLlmProfileId;
@@ -1489,12 +1541,14 @@ function LlmProviderPanel({
               <button title="上移" onClick={() => onMove(profile.id, -1)}>↑</button><button title="下移" onClick={() => onMove(profile.id, 1)}>↓</button>
               <button onClick={() => onToggleExpanded(profile.id)}>{expanded ? "收起" : "编辑"}</button>
               <button onClick={() => onTest(profile)} disabled={test.status === "testing"}>{test.status === "testing" ? "测速中…" : "测速"}</button>
+              <button onClick={() => onUsage(profile)} disabled={usageState.status === "loading"}>{usageState.status === "loading" ? "查询中…" : "用量"}</button>
               <button onClick={() => onLoadModels(profile)} disabled={modelState.status === "loading"}>{modelState.status === "loading" ? "读取中…" : "模型列表"}</button>
               <button onClick={() => onDuplicate(profile)}>复制</button>
               <button className="link danger-text" disabled={active} onClick={() => onRemove(profile.id)}>删除</button>
             </div>
           </div>
-          <div className="provider-card-meta"><span>{profile.baseUrl || "未填写 Base URL"}</span><span>{test.status === "success" ? `可用 · ${test.latencyMs} ms · 首 Token ${test.firstTokenMs ?? "—"} ms` : test.status === "error" ? test.message : "尚未测试"}</span><span>{modelState.models.length ? `${modelState.models.length} 个模型` : "未读取模型列表"}</span></div>
+          <div className="provider-card-meta"><span>{profile.baseUrl || "未填写 Base URL"}</span><span>{test.status === "success" ? `可用 · ${test.latencyMs} ms · 首 Token ${test.firstTokenMs ?? "—"} ms` : test.status === "error" ? test.message : "尚未测试"}</span><span>{modelState.models.length ? `${modelState.models.length} 个模型` : "未读取模型列表"}</span><span>{usageState.status === "success" ? `用量 · ${usageState.message || "已更新"}` : usageState.status === "error" ? `用量失败 · ${usageState.message || "请配置路径"}` : profile.usage?.fetchedAt ? `上次用量 · ${new Date(profile.usage.fetchedAt).toLocaleString()}` : "未查询用量"}</span></div>
+          {profile.healthHistory && profile.healthHistory.length > 0 && <details className="provider-health-history"><summary>最近测试 {profile.healthHistory.length} 次</summary><div>{profile.healthHistory.slice(0, 6).map((entry) => <span key={`${entry.testedAt}-${entry.status}`}>{formatHealthEntry(entry)}</span>)}</div></details>}
           {expanded && <LlmProfileEditor profile={profile} models={modelState.models} modelState={modelState} focus={settings.interviewFocus} onUpdate={(key, value) => updateProfile(profile.id, key, value)} onApplyPreset={(preset) => onApplyPreset(profile.id, preset)} />}
         </article>;
       })}
@@ -1546,6 +1600,7 @@ function LlmProfileEditor({ profile, models, modelState, focus, onUpdate, onAppl
     if (source.api_key !== undefined && source.api_key !== "********" && typeof source.api_key === "string") onUpdate("apiKey", source.api_key);
     if (source.protocol === "responses" || source.protocol === "chat-completions") onUpdate("protocol", source.protocol);
     if (typeof source.request_path === "string") onUpdate("requestPath", source.request_path);
+    if (typeof source.usage_path === "string") onUpdate("usagePath", source.usage_path);
     if (typeof source.context_window === "number" && Number.isFinite(source.context_window)) onUpdate("contextWindow", Math.max(1000, Math.round(source.context_window)));
     if (typeof source.context_window === "string") {
       const parsedWindow = parseContextWindow(source.context_window);
@@ -1567,7 +1622,7 @@ function LlmProfileEditor({ profile, models, modelState, focus, onUpdate, onAppl
       <p className="config-note">当前启用配置不能直接删除；Key 只保存在桌面端 Stronghold，原始配置默认脱敏。</p>
     </>}
     {tab === "parameters" && <div className="form-grid"><Field label="回答精细程度" value={profile.answerDetail || "balanced"} onChange={(value) => onUpdate("answerDetail", value as LlmProfile["answerDetail"])} select={[["concise", "简洁"], ["balanced", "标准"], ["detailed", "详细"]]} /><Field label="思考深度" value={profile.reasoningEffort || "none"} onChange={(value) => onUpdate("reasoningEffort", value as LlmProfile["reasoningEffort"])} select={[["none", "不指定"], ["low", "低"], ["medium", "中"], ["high", "高"]]} /></div>}
-    {tab === "advanced" && <><label>自定义请求路径（可选）</label><input value={profile.requestPath || ""} onChange={(event) => onUpdate("requestPath", event.target.value)} placeholder="/chat/completions" /><label>额外请求头 JSON</label><textarea rows={4} value={profile.extraHeaders || ""} onChange={(event) => onUpdate("extraHeaders", event.target.value)} placeholder='{"X-Trace": "interview-lab"}' /><p className="config-note">请求头必须是合法 JSON 对象；错误会在连接测试时明确提示。</p></>}
+    {tab === "advanced" && <><label>自定义请求路径（可选）</label><input value={profile.requestPath || ""} onChange={(event) => onUpdate("requestPath", event.target.value)} placeholder="/chat/completions" /><label>用量查询路径（可选）</label><input value={profile.usagePath || ""} onChange={(event) => onUpdate("usagePath", event.target.value)} placeholder="/usage 或完整 HTTPS 地址" /><p className="config-note">配置后可在 Provider 卡片点击“用量”；不同服务商接口不同，未配置时不会发送查询请求。</p><label>额外请求头 JSON</label><textarea rows={4} value={profile.extraHeaders || ""} onChange={(event) => onUpdate("extraHeaders", event.target.value)} placeholder='{"X-Trace": "interview-lab"}' /><p className="config-note">请求头必须是合法 JSON 对象；错误会在连接测试时明确提示。</p></>}
     {tab === "raw" && <><div className="config-preview raw-config-preview"><div><strong>可编辑原始 JSON</strong><span>{revealCredential ? "api_key 当前可见" : "api_key 默认隐藏"}</span></div><textarea rows={14} value={rawDraft ?? profileRawConfig(profile, focus, revealCredential)} onChange={(event) => { setRawDraft(event.target.value); setRawError(""); }} /><div className="raw-config-actions"><button className="primary" onClick={applyRawConfig}>应用原始配置</button><button onClick={() => { setRawDraft(profileRawConfig(profile, focus, revealCredential)); setRawError(""); }}>重置草稿</button></div><label className="checkbox"><input type="checkbox" checked={revealCredential} onChange={(event) => { setRevealCredential(event.target.checked); setRawDraft(undefined); }} />显示当前 Key</label>{rawError && <p className="provider-inline-error">{rawError}</p>}</div><div className="config-preview"><div><strong>config.toml 预览</strong><span>{revealCredential ? "当前凭证可见" : "凭证默认隐藏"}</span></div><textarea readOnly rows={8} value={profileConfigPreview(profile, focus, revealCredential)} /></div></>}
     {modelState.status === "error" && <p className="provider-inline-error">{modelState.message}</p>}
   </div>;

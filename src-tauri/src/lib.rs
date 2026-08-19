@@ -4,16 +4,30 @@ use audio::{pause_system_audio_capture, resume_system_audio_capture, start_syste
 use blake2::{Blake2b512, Digest};
 use keyring::Entry;
 use rand::RngCore;
+use serde::Deserialize;
 use tauri::{
     menu::{MenuBuilder, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager,
+    AppHandle, Emitter, Listener, Manager, Runtime,
 };
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 const DATABASE_PATH: &str = "sqlite:interview-lab.db";
 const KEYRING_SERVICE: &str = "Interview Lab";
 const KEYRING_USER: &str = "stronghold-vault-password";
+
+#[derive(Debug, Deserialize)]
+struct TrayProfile {
+    id: String,
+    name: String,
+    model: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TrayProfilesPayload {
+    active_id: String,
+    profiles: Vec<TrayProfile>,
+}
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -50,6 +64,29 @@ fn stronghold_password(password: &str) -> Vec<u8> {
     digest[..32].to_vec()
 }
 
+fn build_tray_menu<R: Runtime>(app: &AppHandle<R>, payload: &TrayProfilesPayload) -> tauri::Result<tauri::menu::Menu<R>> {
+    let show = MenuItem::with_id(app, "show", "打开主窗口", true, None::<&str>)?;
+    let header = MenuItem::with_id(app, "model-header", "切换当前文本模型", false, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出 Interview Lab", true, None::<&str>)?;
+    let mut profile_items = Vec::with_capacity(payload.profiles.len());
+    for profile in &payload.profiles {
+        let marker = if profile.id == payload.active_id { "✓ " } else { "" };
+        let model = if profile.model.trim().is_empty() { "未填写模型" } else { profile.model.as_str() };
+        profile_items.push(MenuItem::with_id(
+            app,
+            format!("profile:{}", profile.id),
+            format!("{marker}{} · {model}", profile.name),
+            true,
+            None::<&str>,
+        )?);
+    }
+    let mut menu = MenuBuilder::new(app).item(&show).separator().item(&header);
+    for item in &profile_items {
+        menu = menu.item(item);
+    }
+    menu.separator().item(&quit).build()
+}
+
 fn database_migrations() -> Vec<Migration> {
     vec![
         Migration {
@@ -72,10 +109,17 @@ pub fn run() {
     tauri::Builder::default()
         .manage(AudioCaptureState::default())
         .setup(|app| {
-            let show = MenuItem::with_id(app, "show", "打开主窗口", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "退出 Interview Lab", true, None::<&str>)?;
-            let menu = MenuBuilder::new(app).items(&[&show, &quit]).build()?;
-            let _tray = TrayIconBuilder::new()
+            let initial_payload = TrayProfilesPayload { active_id: String::new(), profiles: Vec::new() };
+            let menu = build_tray_menu(app.handle(), &initial_payload)?;
+            let app_handle = app.handle().clone();
+            app.listen("tray-update-profiles", move |event| {
+                let Ok(payload) = serde_json::from_str::<TrayProfilesPayload>(event.payload()) else { return; };
+                let Some(tray) = app_handle.tray_by_id("main") else { return; };
+                if let Ok(menu) = build_tray_menu(&app_handle, &payload) {
+                    let _ = tray.set_menu(Some(menu));
+                }
+            });
+            let _tray = TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .show_menu_on_left_click(false)
@@ -89,6 +133,9 @@ pub fn run() {
                     }
                     "quit" => {
                         let _ = app.emit("tray-quit", ());
+                    }
+                    id if id.starts_with("profile:") => {
+                        let _ = app.emit("tray-profile-select", id.trim_start_matches("profile:"));
                     }
                     _ => {}
                 })

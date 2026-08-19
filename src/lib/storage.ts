@@ -1,6 +1,6 @@
 import { isTauri, invoke } from "@tauri-apps/api/core";
 import { sanitizeHeaderConfig, sanitizeLlmError } from "./llm";
-import type { AnswerFramework, AppSettings, AsrPreset, AsrProviderConfig, InterviewFocus, InterviewSession, LlmProfile, MaterialContext, SessionRecord } from "../types";
+import type { AnswerFramework, AppSettings, AsrPreset, AsrProviderConfig, InterviewFocus, InterviewSession, LlmHealth, LlmProfile, LlmUsage, MaterialContext, SessionRecord } from "../types";
 import { createAsrPreset, createDefaultAsrConfig, createDefaultLlmProfile } from "../types";
 
 const SETTINGS_KEY = "interview-lab.settings.v1";
@@ -134,6 +134,7 @@ function normalizeLlmProfile(profile: Partial<LlmProfile>): LlmProfile {
     ? profile.modelOptions.filter((model): model is string => typeof model === "string").slice(0, 200)
     : defaults.modelOptions;
   const apiKey = typeof profile.apiKey === "string" ? profile.apiKey : "";
+  const health = normalizeLlmHealth(profile.health, apiKey);
   return {
     ...defaults,
     ...profile,
@@ -145,11 +146,14 @@ function normalizeLlmProfile(profile: Partial<LlmProfile>): LlmProfile {
     answerDetail: profile.answerDetail === "concise" || profile.answerDetail === "detailed" || profile.answerDetail === "balanced" ? profile.answerDetail : defaults.answerDetail,
     reasoningEffort: profile.reasoningEffort === "low" || profile.reasoningEffort === "medium" || profile.reasoningEffort === "high" || profile.reasoningEffort === "none" ? profile.reasoningEffort : defaults.reasoningEffort,
     apiKey,
-    health: normalizeLlmHealth(profile.health, apiKey),
+    usagePath: typeof profile.usagePath === "string" ? profile.usagePath.slice(0, 240) : defaults.usagePath,
+    health,
+    healthHistory: normalizeLlmHealthHistory(profile.healthHistory, apiKey) ?? (health ? [health] : undefined),
+    usage: normalizeLlmUsage(profile.usage, apiKey),
   };
 }
 
-function normalizeLlmHealth(value: unknown, credential = ""): LlmProfile["health"] {
+function normalizeLlmHealth(value: unknown, credential = ""): LlmHealth | undefined {
   if (!value || typeof value !== "object") return undefined;
   const source = value as Record<string, unknown>;
   if (source.status !== "success" && source.status !== "error") return undefined;
@@ -162,6 +166,23 @@ function normalizeLlmHealth(value: unknown, credential = ""): LlmProfile["health
   if (Number.isFinite(source.firstTokenMs)) health.firstTokenMs = Math.max(0, Math.round(Number(source.firstTokenMs)));
   if (typeof source.message === "string" && source.message.trim()) health.message = sanitizeLlmError(source.message, credential);
   return health;
+}
+
+function normalizeLlmHealthHistory(value: unknown, credential = "") {
+  if (!Array.isArray(value)) return undefined;
+  const history = value.map((item) => normalizeLlmHealth(item, credential)).filter((item): item is LlmHealth => Boolean(item));
+  return history.length ? history.slice(0, 12) : undefined;
+}
+
+function normalizeLlmUsage(value: unknown, credential = ""): LlmUsage | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const source = value as Record<string, unknown>;
+  if (source.status !== "success" && source.status !== "error") return undefined;
+  if (typeof source.fetchedAt !== "string" || !source.fetchedAt.trim()) return undefined;
+  const usage: LlmUsage = { status: source.status, fetchedAt: source.fetchedAt.slice(0, 80) };
+  if (typeof source.summary === "string" && source.summary.trim()) usage.summary = sanitizeLlmError(source.summary, credential).slice(0, 300);
+  if (typeof source.message === "string" && source.message.trim()) usage.message = sanitizeLlmError(source.message, credential);
+  return usage;
 }
 
 function normalizeSettings(stored?: Partial<AppSettings> | null): AppSettings {
@@ -349,7 +370,14 @@ function redactSettings(settings: AppSettings): AppSettings {
     ...settings,
     asr: { ...settings.asr, apiKey: "", extraHeaders: sanitizeHeaderConfig(settings.asr.extraHeaders) },
     asrProfiles,
-    llmProfiles: settings.llmProfiles.map((profile) => ({ ...profile, apiKey: "", extraHeaders: sanitizeHeaderConfig(profile.extraHeaders), health: normalizeLlmHealth(profile.health, profile.apiKey) })),
+    llmProfiles: settings.llmProfiles.map((profile) => ({
+      ...profile,
+      apiKey: "",
+      extraHeaders: sanitizeHeaderConfig(profile.extraHeaders),
+      health: normalizeLlmHealth(profile.health, profile.apiKey),
+      healthHistory: normalizeLlmHealthHistory(profile.healthHistory, profile.apiKey),
+      usage: normalizeLlmUsage(profile.usage, profile.apiKey),
+    })),
   };
 }
 

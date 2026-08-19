@@ -110,6 +110,16 @@ describe("loadSettings", () => {
     expect(healthMessage).toContain("********");
   });
 
+  it("normalizes a bounded provider health history and usage snapshot", () => {
+    const history = Array.from({ length: 20 }, (_, index) => ({ status: "success", testedAt: `2026-08-18T08:${String(index).padStart(2, "0")}:00.000Z`, latencyMs: index }));
+    setStoredSettings({ llmProfiles: [{ id: "history-profile", name: "历史模型", healthHistory: history, usage: { status: "success", fetchedAt: "2026-08-18T09:00:00.000Z", summary: "总 Token 10" } }] });
+
+    const profile = loadSettings().llmProfiles[0];
+    expect(profile.healthHistory).toHaveLength(12);
+    expect(profile.healthHistory?.[0]?.latencyMs).toBe(0);
+    expect(profile.usage).toMatchObject({ status: "success", summary: "总 Token 10" });
+  });
+
   it("redacts sensitive values inside custom request headers", async () => {
     const values = setStoredSettings(null);
     const settings = defaultSettings();

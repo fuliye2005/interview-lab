@@ -16,6 +16,7 @@
 
 最近已推送提交：
 
+- 当前待发布批次：Provider 测速历史、可选用量查询和托盘模型快速切换已实现，目标版本 `0.2.4`。
 - `f060161`：配置/备份/诊断中的自定义请求头敏感值脱敏，桌面端通过 Stronghold 恢复完整请求头；版本升级到 `0.2.3`。
 - `b0fe5e3`：悬浮面试台 2.0，布局、置顶、透明度、点击穿透、位置/尺寸记忆、独立滚轮和上下文抽屉。
 - `6b07133`：回答区操作栏移到回答内容之前，并修正小窗口下回答区域的最小高度。
@@ -27,11 +28,11 @@
 - `a036025`：同一会话内的暂停/继续控制，暂停期间系统音频排空但不发送给 ASR。
 - 当前批次：启动时按组件从最近 SQLite 备份自动恢复损坏的配置/材料/会话，并在诊断区提示恢复结果；模型 Provider 健康状态、启动运行环境诊断、完整快照事务写入和数据 schema v2 迁移已接入。
 
-最近一次已验证结果：49 项 Vitest 通过、前端生产构建通过、`cargo check` 通过；SQLite v2 迁移编译通过，Tauri `--no-bundle` release 构建和 NSIS/MSI 安装包构建均已完成。
+最近一次已验证结果：53 项 Vitest 通过、前端生产构建通过、`cargo check` 通过；SQLite v2 迁移编译通过。Provider 测速历史、可选用量查询、托盘动态菜单已完成代码接入，等待 `0.2.4` release 构建。
 
 ## 当前工作树
 
-当前分支为 `main`，本地与 `origin/main` 均已包含发布提交 `f060161`；当前可用版本为 `0.2.3`。版本号已同步 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 和 `src-tauri/tauri.conf.json`。最新 release EXE 已复制到 `D:\Interview Lab\tauri-app.exe`，SHA-256 为 `5547F098BA6DA24122CE0ADA113ADCA0F53AFF505E09A158F56BD02171A818CC`；桌面安装包为 `Interview Lab 0.2.3 安装包.exe` 和 `Interview Lab 0.2.3 安装包.msi`。4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
+当前分支为 `main`，本地与 `origin/main` 仍以 `0.2.3` 发布提交为基线；工作树当前准备发布 `0.2.4`。版本号已同步 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 和 `src-tauri/tauri.conf.json`。上一版 release EXE 位于 `D:\Interview Lab\tauri-app.exe`，SHA-256 为 `5547F098BA6DA24122CE0ADA113ADCA0F53AFF505E09A158F56BD02171A818CC`；4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
 
 - 安全备份 JSON 导出/导入，导出内容明确排除 API Key，导入保留本机已有凭证。
 - 存储诊断：SQLite/localStorage、数据版本、Stronghold、备份数量和 SQLite quick check。
@@ -44,6 +45,8 @@
 - 启动时如果单项 JSON 或会话 payload 无法解析，会只从最近备份恢复对应组件；没有备份时保留其它正常数据，并展示诊断提示。
 - 回答面板已改为明确的三行 grid：标题、操作栏、回答内容；操作栏不再依赖 flex `order`，避免小窗口下被内容挤到面板底部。
 - 模型 Provider 测速结果会记录成功/失败、测速时间、总延迟、首 Token 和脱敏错误；修改连接配置或切换预配置会清除过期健康状态。
+- 模型 Provider 会保留最近 12 次测速历史，可在卡片中展开查看；高级配置支持可选用量查询路径，按常见 Token、费用、额度和剩余字段生成脱敏摘要，未配置路径时不会发送查询请求。
+- 系统托盘菜单会根据本机 Provider 配置动态更新，显示当前启用项；点击 Provider 只切换活动模型，不强制打开主窗口，也不传递 API Key。
 - 数据与恢复面板会显示浏览器预览、Tauri WebView 或 Windows WebView2 运行环境，帮助区分开发预览和正式桌面端。
 - 导入安全备份和恢复最近备份会在覆盖前强制创建脱敏快照，并在 SQLite 单事务内同时写入配置、材料和会话，失败时回滚事务。
 - 数据层升级到 schema v2：SQLite 增加 `storage_migration_log`，诊断读取真实 `_sqlx_migrations` 记录并显示迁移状态；安全备份从 v1 导入时自动规范化为 v2。
@@ -51,7 +54,7 @@
 - 实时增量转写与最终问题框保持分栏：前者是只读的 ASR 临时状态，后者是可编辑、清空并提交给模型的最终问题，不能合并。
 - 会话控制条和两栏输入区前置，上下文、回答框架、快捷键等次要信息下沉到次级区域；回答生成时悬浮窗可后台预热但保持隐藏和主窗口焦点，只有用户主动点击“打开悬浮窗”才显示并切换焦点。
 
-上一批已通过 47 项 Vitest、前端生产构建、`cargo check`、Tauri `--no-bundle` release 构建和 Windows 安装包构建；本轮新增安全脱敏与 Stronghold 迁移后，49 项 Vitest、前端生产构建和 `cargo check` 均通过。`0.2.3` 的 Tauri `--no-bundle` release、NSIS 和 MSI 构建均完成，EXE 已复制到交付目录并核对哈希。
+上一批已通过 47 项 Vitest、前端生产构建、`cargo check`、Tauri `--no-bundle` release 构建和 Windows 安装包构建；安全脱敏批次为 49 项测试；本轮 Provider 增强后为 53 项 Vitest、前端生产构建和 `cargo check` 均通过。`0.2.4` 待完成 Tauri release、NSIS 和 MSI 构建。
 
 ## 下一检查点
 
@@ -60,7 +63,7 @@
    - 置顶、点击穿透、隐藏/重开、位置/尺寸记忆、独立滚轮、上下文抽屉、停止/重新生成和四组快捷键需要在 release EXE 中集中验证。
 3. 检查 SQLite quick check 在 Tauri SQL 插件上返回值是否稳定；失败只显示诊断错误，不覆盖数据。
 4. 主窗口 `760×560` 暂不作为当前验收重点，后续按真实使用反馈再处理窄窗口适配。
-5. 本次交付点：`0.2.3` 已生成并推送，桌面 EXE 与 NSIS/MSI 安装包已更新；每次后续发布继续递增版本号，不重复使用旧版本号。真实数据库损坏演练和用户在 release EXE 中的悬浮窗验收仍待继续。
+5. 本次交付点：`0.2.4` 代码已完成并通过集中验证，待生成并推送对应桌面 EXE 与 NSIS/MSI 安装包；每次后续发布继续递增版本号，不重复使用旧版本号。真实数据库损坏演练和用户在 release EXE 中的悬浮窗验收仍待继续。
 
 ## 第一性原理审查清单
 

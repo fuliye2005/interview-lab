@@ -1,5 +1,5 @@
 import { ANSWER_FRAMEWORK_LABELS } from "../types";
-import type { AnswerDetail, AnswerFramework, InterviewFocus, InterviewTurn, LlmProfile, MaterialContext } from "../types";
+import type { AnswerDetail, AnswerFramework, InterviewFocus, InterviewTurn, LlmProfile, LlmUsage, MaterialContext } from "../types";
 import { providerRequiresKey } from "./providers";
 
 export function sanitizeAnswerText(text: string) {
@@ -105,6 +105,7 @@ function parseHeaders(input?: string) {
 }
 
 function makeUrl(baseUrl: string, path: string) {
+  if (/^https?:\/\//i.test(path)) return path;
   const cleanBase = baseUrl.replace(/\/+$/, "");
   return `${cleanBase}${path.startsWith("/") ? path : `/${path}`}`;
 }
@@ -199,4 +200,55 @@ export async function testLlmConnection(profile: LlmProfile) {
     latencyMs: Math.round(performance.now() - startedAt),
     firstTokenMs,
   };
+}
+
+function usageValue(root: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = root[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  }
+  return undefined;
+}
+
+function usageRoot(payload: unknown): Record<string, unknown> {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return {};
+  const root = payload as Record<string, unknown>;
+  if (root.data && typeof root.data === "object" && !Array.isArray(root.data)) return root.data as Record<string, unknown>;
+  if (root.usage && typeof root.usage === "object" && !Array.isArray(root.usage)) return root.usage as Record<string, unknown>;
+  return root;
+}
+
+/** Convert common provider usage payloads into a short, non-sensitive summary. */
+export function summarizeLlmUsage(payload: unknown) {
+  const root = usageRoot(payload);
+  const totalTokens = usageValue(root, ["total_tokens", "totalTokens", "tokens"]);
+  const promptTokens = usageValue(root, ["prompt_tokens", "promptTokens", "input_tokens", "inputTokens"]);
+  const completionTokens = usageValue(root, ["completion_tokens", "completionTokens", "output_tokens", "outputTokens"]);
+  const cost = usageValue(root, ["total_cost", "totalCost", "cost", "spend"]);
+  const limit = usageValue(root, ["limit", "limitUsd", "limit_usd"]);
+  const remaining = usageValue(root, ["remaining", "remainingUsd", "remaining_usd"]);
+  const currency = typeof root.currency === "string" ? root.currency : "$";
+  const parts: string[] = [];
+  if (totalTokens !== undefined) parts.push(`总 Token ${totalTokens.toLocaleString()}`);
+  else if (promptTokens !== undefined || completionTokens !== undefined) parts.push(`输入 ${promptTokens?.toLocaleString() ?? "—"} · 输出 ${completionTokens?.toLocaleString() ?? "—"} Token`);
+  if (cost !== undefined) parts.push(`费用 ${currency}${cost}`);
+  if (limit !== undefined) parts.push(`额度 ${currency}${limit}`);
+  if (remaining !== undefined) parts.push(`剩余 ${currency}${remaining}`);
+  return parts.length ? parts.join(" · ") : "服务已返回用量数据（字段未识别）";
+}
+
+export async function fetchLlmUsage(profile: LlmProfile): Promise<Pick<LlmUsage, "summary">> {
+  if (!profile.baseUrl) throw new Error("请先填写模型 Base URL");
+  if (!profile.usagePath?.trim()) throw new Error("请先在高级请求中填写用量查询路径，例如 /usage");
+  const response = await fetch(makeUrl(profile.baseUrl, profile.usagePath.trim()), { headers: authHeaders(profile) });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`获取用量失败：${response.status} ${text}`);
+  let payload: unknown;
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error("用量接口返回的不是合法 JSON");
+  }
+  return { summary: summarizeLlmUsage(payload) };
 }

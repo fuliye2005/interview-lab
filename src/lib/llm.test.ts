@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildInterviewPrompt, listLlmModels, sanitizeAnswerText, sanitizeLlmError, selectInterviewContext, streamLlm, testLlmConnection } from "./llm";
+import { buildInterviewPrompt, fetchLlmUsage, listLlmModels, sanitizeAnswerText, sanitizeLlmError, selectInterviewContext, streamLlm, summarizeLlmUsage, testLlmConnection } from "./llm";
 import type { LlmProfile, MaterialContext } from "../types";
 
 const materials: MaterialContext = {
@@ -196,6 +196,26 @@ describe("streamLlm reasoning settings", () => {
 
     await expect(streamLlm(profile(), "问题", () => undefined, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
     expect(fetchMock).toHaveBeenCalled();
+  });
+});
+
+describe("provider usage", () => {
+  it("summarizes common nested token and cost fields", () => {
+    expect(summarizeLlmUsage({ data: { total_tokens: 12345, total_cost: 1.25, currency: "USD", remaining: 4.5 } })).toContain("总 Token 12,345");
+    expect(summarizeLlmUsage({ data: { total_tokens: 12345, total_cost: 1.25, currency: "USD", remaining: 4.5 } })).toContain("费用 USD1.25");
+    expect(summarizeLlmUsage({ usage: { input_tokens: 10, output_tokens: 20 } })).toContain("输入 10 · 输出 20 Token");
+  });
+
+  it("fetches usage through the configured path and keeps the auth header", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ total_tokens: 99 }), { status: 200 }));
+
+    await expect(fetchLlmUsage(profile({ usagePath: "/usage" }))).resolves.toEqual({ summary: "总 Token 99" });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://example.test/v1/usage");
+    expect((fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>).Authorization).toBe("Bearer test-key");
+  });
+
+  it("requires an explicit usage endpoint", async () => {
+    await expect(fetchLlmUsage(profile())).rejects.toThrow("用量查询路径");
   });
 });
 

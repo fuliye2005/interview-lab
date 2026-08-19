@@ -36,17 +36,29 @@ export interface LlmProfile {
   modelOptions?: string[];
   protocol: LlmProtocol;
   requestPath?: string;
+  usagePath?: string;
   extraHeaders?: string;
   contextWindow?: number;
   answerDetail: AnswerDetail;
   reasoningEffort: ReasoningEffort;
-  health?: {
-    status: LlmHealthStatus;
-    testedAt: string;
-    latencyMs?: number;
-    firstTokenMs?: number;
-    message?: string;
-  };
+  health?: LlmHealth;
+  healthHistory?: LlmHealth[];
+  usage?: LlmUsage;
+}
+
+export interface LlmHealth {
+  status: LlmHealthStatus;
+  testedAt: string;
+  latencyMs?: number;
+  firstTokenMs?: number;
+  message?: string;
+}
+
+export interface LlmUsage {
+  status: "success" | "error";
+  fetchedAt: string;
+  summary?: string;
+  message?: string;
 }
 
 export interface AsrProviderConfig {
@@ -262,6 +274,7 @@ export const createDefaultLlmProfile = (): LlmProfile => ({
   modelOptions: [],
   protocol: "chat-completions",
   requestPath: "",
+  usagePath: "",
   extraHeaders: "",
   contextWindow: 8000,
   answerDetail: "balanced",
