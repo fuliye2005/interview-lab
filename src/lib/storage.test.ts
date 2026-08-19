@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createExternalSnapshot, createSafeDataBundle, defaultSettings, loadHistory, loadSettings, mergeStoredHeaderConfig, parseExternalSnapshot, parseSafeDataBundle, saveSettings, saveSnapshot } from "./storage";
+import { createExternalSnapshot, createSafeDataBundle, defaultSettings, isLikelyDatabaseCorruption, loadHistory, loadSettings, mergeStoredHeaderConfig, parseExternalSnapshot, parseSafeDataBundle, saveSettings, saveSnapshot } from "./storage";
 
 const historyKey = "interview-lab.history.v1";
 const settingsKey = "interview-lab.settings.v1";
@@ -211,6 +211,13 @@ describe("loadSettings", () => {
 });
 
 describe("external recovery snapshots", () => {
+  it("only treats explicit SQLite corruption messages as recoverable database damage", () => {
+    expect(isLikelyDatabaseCorruption(new Error("database disk image is malformed"))).toBe(true);
+    expect(isLikelyDatabaseCorruption({ message: "file is not a database" })).toBe(true);
+    expect(isLikelyDatabaseCorruption(new Error("migration failed: permission denied"))).toBe(false);
+    expect(isLikelyDatabaseCorruption(new Error("unable to open database file"))).toBe(false);
+  });
+
   it("creates a versioned snapshot without API keys or sensitive headers", () => {
     const settings = defaultSettings();
     settings.asr.apiKey = "asr-external-secret";

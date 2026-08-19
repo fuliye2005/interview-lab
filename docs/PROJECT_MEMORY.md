@@ -1,6 +1,6 @@
 # Interview Lab 项目记忆区
 
-更新时间：2026-08-19 12:31
+更新时间：2026-08-19 12:46
 
 这不是用户数据或密钥文件，只记录产品不变量、实现证据、未验证风险和下一检查点。任何继续工作前先读取本文件，并以当前工作树、测试输出和 release 构建为准。
 
@@ -28,13 +28,13 @@
 - `16672e8`：悬浮窗停止/重新生成、四组独立快捷键、构建追踪和异常退出标记。
 - `0706a15`：Provider 四标签编辑器、原始 JSON 应用、历史会话搜索、ASR Token 过期提示和配置预览 Key 显示开关。
 - `a036025`：同一会话内的暂停/继续控制，暂停期间系统音频排空但不发送给 ASR。
-- 当前批次：增加脱敏外部快照、损坏 SQLite 主文件及 WAL/SHM 伴随文件隔离、原子快照写入和外部快照事务恢复；模型 Provider 健康状态、启动运行环境诊断、完整快照事务写入和数据 schema v2 迁移已接入。
+- 当前批次：增加脱敏外部快照、损坏 SQLite 主文件及 WAL/SHM 伴随文件隔离、原子快照写入和外部快照事务恢复；正常退出快照排队在待处理写入之后，并只对明确的 SQLite 损坏错误执行隔离；模型 Provider 健康状态、启动运行环境诊断、完整快照事务写入和数据 schema v2 迁移已接入。
 
-最近一次已验证结果：56 项 Vitest 通过、前端生产构建通过、`cargo check` 通过；SQLite v2 迁移编译通过；`0.2.6` Tauri release、NSIS 和 MSI 构建均完成。
+最近一次已验证结果：57 项 Vitest 通过、前端生产构建通过、`cargo check` 通过；SQLite v2 迁移编译通过；`0.2.7` Tauri release、NSIS 和 MSI 构建均完成；release EXE 已在本机启动，标题为 `Interview Lab · 实时语音测试台`，窗口可见且进程响应正常。
 
 ## 当前工作树
 
-当前分支为 `main`，功能提交为 `c900d0d`，本地与 `origin/main` 一致。本轮发布构建使用 0.2.6 工作树。当前可用版本为 `0.2.6`。最新 release EXE 已复制到 `D:\Interview Lab\tauri-app.exe`，SHA-256 为 `C8FC9CB24329AE620BA4769D27C80FC82F1D2EE7DFDACAD60F945A311DD4A06A`；NSIS 安装包已复制为桌面 `Interview Lab 0.2.6 安装包.exe`，SHA-256 为 `D05C3AFCDF24BFCC1687D1343C8BA7C37889595A1D7A4E7A5A260B58C33C75BB`；MSI 安装包已复制为桌面 `Interview Lab 0.2.6 安装包.msi`，SHA-256 为 `2211C6E3F5806365FFE0E9AB8289427E5B6DBA3F1BA17348DBCDCC1340FCB478`。4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
+当前分支为 `main`，0.2.7 功能提交待本轮提交后记录；此前本地与 `origin/main` 一致。本轮发布构建使用 0.2.7 工作树。当前可用版本为 `0.2.7`。最新 release EXE 已复制到 `D:\Interview Lab\tauri-app.exe`，SHA-256 为 `8DAFCFF02B63BB50F0C7D71B69409CBC951FC11046A8A7649D232B75FFCA8975`；NSIS 安装包已复制为桌面 `Interview Lab 0.2.7 安装包.exe`，SHA-256 为 `6C06987E0BB9D9A1D7A46F930D83FA34E6D70C03690FAB0F5522B82EAB29A0DA`；MSI 安装包已复制为桌面 `Interview Lab 0.2.7 安装包.msi`，SHA-256 为 `0E4CC5E2101FA24DF3DFAE4B1053543535046D0C720297555B3542912377CB84`。4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
 
 - 安全备份 JSON 导出/导入，导出内容明确排除 API Key，导入保留本机已有凭证。
 - 存储诊断：SQLite/localStorage、数据版本、Stronghold、备份数量和 SQLite quick check。
@@ -58,7 +58,7 @@
 - 悬浮窗“启动测试”现在会调用主窗口同一套启动流程；每场面试草稿（问题、增量转写、回答、上下文、轮数和临时回答框架）随会话保存，重启后自动恢复；ASR 草稿恢复为暂停状态，用户点击“继续”才重连音频。
 - 历史会话详情和一级列表会标记“未完成草稿”；结束会话会清除草稿标记，已完成轮次仍保留在会话记录中。
 
-上一批已通过 47 项 Vitest、前端生产构建、`cargo check`、Tauri `--no-bundle` release 构建和 Windows 安装包构建；安全脱敏批次为 49 项测试；Provider 增强后为 53 项；未完成会话恢复后为 54 项；本轮外部快照恢复后为 56 项 Vitest，前端生产构建、`cargo check`、Tauri release、NSIS 和 MSI 构建均完成，0.2.6 EXE 已复制到交付目录并核对哈希。
+上一批已通过 47 项 Vitest、前端生产构建、`cargo check`、Tauri `--no-bundle` release 构建和 Windows 安装包构建；安全脱敏批次为 49 项测试；Provider 增强后为 53 项；未完成会话恢复后为 54 项；外部快照恢复后为 56 项；本轮错误分类和退出顺序修正后为 57 项 Vitest，前端生产构建、`cargo check`、Tauri release、NSIS 和 MSI 构建均完成，0.2.7 EXE 已复制到交付目录并核对哈希。
 
 ## 下一检查点
 
@@ -68,7 +68,7 @@
 3. 进行一次真实数据库损坏演练，并确认组件级恢复不会覆盖正常配置或 Stronghold 凭证。
 4. 做一次 30 轮以上真实连续对话运行时验收；单元测试已覆盖上下文选择，但不能替代真实模型流式链路。
 5. 主窗口 `760×560` 暂不作为当前验收重点；多显示器、麦克风双通道和本地 ASR 已按用户决定取消，不再列为交付项。
-6. 本次交付点：`0.2.6` 已生成，桌面 EXE 与 NSIS/MSI 安装包已更新；代码和记忆区提交后推送到 GitHub。每次后续发布继续递增版本号，不重复使用旧版本号。
+6. 本次交付点：`0.2.7` 已生成，桌面 EXE 与 NSIS/MSI 安装包已更新；代码和记忆区提交后推送到 GitHub。每次后续发布继续递增版本号，不重复使用旧版本号。
 
 ## 第一性原理审查清单
 

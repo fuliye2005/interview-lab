@@ -11,6 +11,20 @@ const STRONGHOLD_CLIENT = "interview-lab";
 const BACKUP_INTERVAL_MS = 5 * 60 * 1000;
 export const DATA_SCHEMA_VERSION = 2;
 
+function errorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+export function isLikelyDatabaseCorruption(error: unknown) {
+  return /database\s+disk\s+image\s+is\s+malformed|file\s+is\s+not\s+a\s+database|not\s+a\s+database|database(?:\s+file)?\s+is\s+corrupt|malformed\s+database|sqlite[_\s-]?corrupt/i.test(errorMessage(error));
+}
+
 type SqlResult = { rowsAffected: number; lastInsertId?: number };
 interface SqlDatabase {
   execute(query: string, bindValues?: unknown[]): Promise<SqlResult>;
@@ -707,6 +721,7 @@ async function createTauriContext(): Promise<PersistentContext> {
   try {
     db = await Database.load(DATABASE_PATH) as unknown as SqlDatabase;
   } catch (error) {
+    if (!isLikelyDatabaseCorruption(error)) throw error;
     const isolated = await invoke<string | null>("isolate_corrupt_database").catch(() => null);
     if (!isolated) throw error;
     databaseRecovered = true;
@@ -902,8 +917,10 @@ export async function initializeStorage(): Promise<PersistentSnapshot> {
 export async function markCleanShutdown() {
   const context = await getTauriContext();
   if (!context) return;
-  await writeExternalSnapshot(context.snapshot, "clean shutdown");
-  await enqueue(context, () => upsertDocument(context, "runtime", { state: "clean", startedAt: context.startup.lastStartedAt || new Date().toISOString(), cleanAt: new Date().toISOString() })).catch(() => undefined);
+  await enqueue(context, async () => {
+    await writeExternalSnapshot(context.snapshot, "clean shutdown");
+    await upsertDocument(context, "runtime", { state: "clean", startedAt: context.startup.lastStartedAt || new Date().toISOString(), cleanAt: new Date().toISOString() });
+  }).catch(() => undefined);
 }
 
 export async function restoreLatestBackup(): Promise<PersistentSnapshot | undefined> {
