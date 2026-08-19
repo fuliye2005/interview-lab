@@ -34,7 +34,7 @@
 
 ## 当前工作树
 
-当前分支为 `main`，功能提交为 `f8ad668`；本轮发布构建使用该提交，记忆区记录提交随后补齐。当前可用版本为 `0.2.5`。最新 release EXE 已复制到 `D:\Interview Lab\tauri-app.exe`，SHA-256 为 `73C9CC5FD86F8445D8A1FB3419F09545B4CA431E36306B5753E432163D4D885C`；NSIS 安装包 SHA-256 为 `B1EFF1B62C4449E555712B5B63023F664DA2A43E0E857F001A04F0A71A55DD68`；MSI 安装包 SHA-256 为 `BA2245930FE4B2D4E584C79B34EDD3851F59B6AD824E91FA5DC05EEAEC2E13CE`。桌面安装包为 `Interview Lab 0.2.5 安装包.exe` 和 `Interview Lab 0.2.5 安装包.msi`。4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
+当前分支为 `main`，功能提交为 `f8ad668`，记忆区发布提交为 `946a452`，本地与 `origin/main` 一致。本轮发布构建使用功能提交 `f8ad668`。当前可用版本为 `0.2.5`。最新 release EXE 已复制到 `D:\Interview Lab\tauri-app.exe`，SHA-256 为 `73C9CC5FD86F8445D8A1FB3419F09545B4CA431E36306B5753E432163D4D885C`；NSIS 安装包 SHA-256 为 `B1EFF1B62C4449E555712B5B63023F664DA2A43E0E857F001A04F0A71A55DD68`；MSI 安装包 SHA-256 为 `BA2245930FE4B2D4E584C79B34EDD3851F59B6AD824E91FA5DC05EEAEC2E13CE`。桌面安装包为 `Interview Lab 0.2.5 安装包.exe` 和 `Interview Lab 0.2.5 安装包.msi`。4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
 
 - 安全备份 JSON 导出/导入，导出内容明确排除 API Key，导入保留本机已有凭证。
 - 存储诊断：SQLite/localStorage、数据版本、Stronghold、备份数量和 SQLite quick check。
