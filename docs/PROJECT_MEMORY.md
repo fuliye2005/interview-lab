@@ -1,6 +1,6 @@
 # Interview Lab 项目记忆区
 
-更新时间：2026-08-18 18:22
+更新时间：2026-08-19
 
 这不是用户数据或密钥文件，只记录产品不变量、实现证据、未验证风险和下一检查点。任何继续工作前先读取本文件，并以当前工作树、测试输出和 release 构建为准。
 
@@ -30,7 +30,7 @@
 
 ## 当前工作树
 
-当前分支为 `main`，本地与 `origin/main` 均为 `cec7e91`；本次应用 release 构建对应产品代码提交 `4bc0de4`（后续仅追加记忆区文档提交）。最新 release EXE 已复制到 `D:\Interview Lab\tauri-app.exe`，桌面快捷方式 `Interview Lab.lnk` 指向该文件；NSIS 安装包和 MSI 安装包已复制到桌面，文件名分别为 `Interview Lab 0.2.1 安装包.exe` 与 `Interview Lab 0.2.1 安装包.msi`。4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
+当前分支为 `main`，本次正在从 `0.2.1` 升级到 `0.2.2`；版本号必须同步 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 和 `src-tauri/tauri.conf.json`，再生成对应安装包。上一版 release EXE 已复制到 `D:\Interview Lab\tauri-app.exe`，桌面快捷方式 `Interview Lab.lnk` 指向该文件；上一版 NSIS 安装包和 MSI 安装包文件名分别为 `Interview Lab 0.2.1 安装包.exe` 与 `Interview Lab 0.2.1 安装包.msi`。4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
 
 - 安全备份 JSON 导出/导入，导出内容明确排除 API Key，导入保留本机已有凭证。
 - 存储诊断：SQLite/localStorage、数据版本、Stronghold、备份数量和 SQLite quick check。
@@ -58,7 +58,7 @@
    - 置顶、点击穿透、隐藏/重开、位置/尺寸记忆、独立滚轮、上下文抽屉、停止/重新生成和四组快捷键需要在 release EXE 中集中验证。
 3. 检查 SQLite quick check 在 Tauri SQL 插件上返回值是否稳定；失败只显示诊断错误，不覆盖数据。
 4. 主窗口 `760×560` 暂不作为当前验收重点，后续按真实使用反馈再处理窄窗口适配。
-5. 本次交付点：`4bc0de4` 已推送，最新 EXE 已覆盖桌面旧版本，NSIS/MSI 安装包已放置桌面；下次继续真实数据库损坏演练和用户在 release EXE 中的悬浮窗验收。
+5. 本次交付点：版本号升级到 `0.2.2` 后重新生成并推送；每次后续发布继续递增版本号，不重复使用旧版本号。真实数据库损坏演练和用户在 release EXE 中的悬浮窗验收仍待继续。
 
 ## 第一性原理审查清单
 
@@ -74,5 +74,5 @@
 - 数据库迁移版本化已完成 v2；仍需做真实数据库损坏演练并记录结果。
 - 发布版本、Git 提交、构建时间和数据版本的启动展示已接入，并已在 release 构建产物中核对提交号 `4bc0de4`。
 - 更完整的模型 Provider 健康历史（当前已持久化最近一次结果；仍未做多次历史与用量查询）、托盘切换和高级配置标签页。
-- 多显示器贴边、全局显示/隐藏与停止生成快捷键的完整验收。
-- 麦克风双通道、本地 ASR，以及 30 轮以上真实连续对话的运行时验收。
+- 全局显示/隐藏与停止生成快捷键仍需在 release EXE 中集中验收。
+- 30 轮以上真实连续对话仍需运行时验收。
