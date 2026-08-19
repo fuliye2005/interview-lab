@@ -15,6 +15,7 @@ import { importRepository as importRepositoryMaterial } from "./lib/repository";
 import { detectRuntimeEnvironment } from "./lib/runtime";
 import { formatShortcut, shortcutKeyToken, toGlobalShortcut } from "./lib/shortcut";
 import { clearHistory, createSafeDataBundle, defaultSettings, emptyMaterials, getStorageDiagnostics, initializeStorage, loadHistory, loadMaterials, loadSettings, markCleanShutdown, mergeStoredHeaderConfig, parseSafeDataBundle, restoreLatestBackup, saveHistory, saveMaterials, saveSettings, saveSnapshot } from "./lib/storage";
+import { parseSimpleToml, serializeSimpleToml, type SimpleTomlValue } from "./lib/toml";
 import type { StorageDiagnostics } from "./lib/storage";
 import type { AnswerFramework, AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, InterviewContextTurn, InterviewDraft, InterviewFocus, InterviewSession, InterviewTurn, LlmHealth, LlmProfile, LlmProviderPresetId, MaterialContext, OverlayLayout, OverlaySettings, SessionRecord, WheelScrollSettings } from "./types";
 import { ANSWER_FRAMEWORK_LABELS, createAsrPreset, createDefaultLlmProfile, INTERVIEW_FOCUS_LABELS } from "./types";
@@ -30,7 +31,7 @@ type ProfileUsageState = { status: "idle" | "loading" | "success" | "error"; mes
 type ProfileSort = "active" | "name" | "updated";
 type ProfileModelState = { status: "idle" | "loading" | "success" | "error"; models: string[]; message?: string };
 type AsrProfileTestState = { status: "idle" | "testing" | "success" | "error"; mode?: "connection" | "final"; latencyMs?: number; finalText?: string; errorKind?: string; message?: string; hint?: string };
-type LlmEditorTab = "basic" | "parameters" | "advanced" | "raw";
+type LlmEditorTab = "basic" | "parameters" | "advanced" | "raw" | "toml";
 
 function persistedProfileTest(profile: Pick<LlmProfile, "health">): ProfileTestState {
   return profile.health ? { ...profile.health } : { status: "idle" };
@@ -137,17 +138,27 @@ function parseContextWindow(value: string) {
   return Number.isFinite(parsed) && parsed >= 1_000 && parsed <= 128_000_000 ? parsed : undefined;
 }
 
+function profileTomlValues(profile: LlmProfile, focus: InterviewFocus, revealKey = false): Record<string, SimpleTomlValue> {
+  return {
+    name: profile.name,
+    // Keep the machine-stable preset id in config files; labels can change.
+    provider: profile.preset ?? profile.provider ?? "custom",
+    base_url: profile.baseUrl,
+    api_key: profile.apiKey ? revealKey ? profile.apiKey : "********" : "",
+    model: profile.model,
+    protocol: profile.protocol,
+    request_path: profile.requestPath || "",
+    usage_path: profile.usagePath || "",
+    context_window: formatContextWindow(profile.contextWindow || 8000),
+    answer_detail: profile.answerDetail,
+    reasoning_effort: profile.reasoningEffort,
+    extra_headers: sanitizeHeaderConfig(profile.extraHeaders, revealKey),
+    interview_focus: focus,
+  };
+}
+
 function profileConfigPreview(profile: LlmProfile, focus: InterviewFocus, revealKey = false) {
-  return `model = "${profile.model || "未填写"}"
-provider = "${providerLabel(profile)}"
-base_url = "${profile.baseUrl || "未填写"}"
-protocol = "${profile.protocol}"
-usage_path = "${profile.usagePath || "未配置"}"
-context_window = ${profile.contextWindow || 8000}
-answer_detail = "${profile.answerDetail}"
-reasoning_effort = "${profile.reasoningEffort}"
-interview_focus = "${focus}"
-api_key = "${profile.apiKey ? revealKey ? profile.apiKey : "********" : "未填写"}"`;
+  return serializeSimpleToml(profileTomlValues(profile, focus, revealKey));
 }
 
 function profileRawConfig(profile: LlmProfile, focus: InterviewFocus, revealKey = false) {
@@ -1593,7 +1604,7 @@ function AsrProviderPanel({
             <div className="provider-editor-top"><Field label="名称" value={profile.name} onChange={(value) => onUpdate(preset.id, "name", value)} /><Field label="WebSocket URL" value={profile.wsUrl} onChange={(value) => onUpdate(preset.id, "wsUrl", value)} placeholder="wss://…" /></div>
             <div className="form-grid"><Field label={profile.protocol === "aliyun-nls" ? "阿里云临时 Token" : profile.protocol === "volcengine-asr" ? "豆包 Access Token" : "API Key（可选）"} value={profile.apiKey} type="password" onChange={(value) => onUpdate(preset.id, "apiKey", value)} />{profile.protocol === "aliyun-nls" && <Field label="阿里云 AppKey" value={profile.appKey || ""} onChange={(value) => onUpdate(preset.id, "appKey", value)} />}{profile.protocol === "volcengine-asr" && <><Field label="豆包 App ID" value={profile.appId || ""} onChange={(value) => onUpdate(preset.id, "appId", value)} /><Field label="豆包 Cluster" value={profile.cluster || ""} onChange={(value) => onUpdate(preset.id, "cluster", value)} placeholder="控制台显示的 Cluster ID" /></>}<Field label="超时（ms）" value={String(profile.timeoutMs)} onChange={(value) => onUpdate(preset.id, "timeoutMs", Number(value) || 10000)} /></div>
             {profile.protocol === "volcengine-asr" && <p className="config-warning">豆包需要自定义二进制协议和 Authorization 头；当前浏览器 WebSocket 适配器只保存并诊断该配置，实时会话仍请先使用阿里云或通用 WebSocket。</p>}
-            <details><summary>高级协议与稳定性</summary><p className="config-note">断线时最多重连指定次数，音频缓存有上限；最终事件会自动去重。</p><div className="form-grid three"><Field label="音频封装" value={profile.audioMode} onChange={(value) => onUpdate(preset.id, "audioMode", value as AsrProviderConfig["audioMode"])} select={[["binary", "原始二进制 PCM"], ["json-base64", "JSON Base64"]]} /><Field label="重连次数" value={String(profile.reconnectAttempts ?? 2)} onChange={(value) => onUpdate(preset.id, "reconnectAttempts", Number(value) || 0)} /><Field label="重连间隔（ms）" value={String(profile.reconnectDelayMs ?? 800)} onChange={(value) => onUpdate(preset.id, "reconnectDelayMs", Number(value) || 800)} /><Field label="音频队列上限" value={String(profile.audioQueueLimit ?? 24)} onChange={(value) => onUpdate(preset.id, "audioQueueLimit", Number(value) || 24)} /><Field label="事件路径" value={profile.eventPath || ""} onChange={(value) => onUpdate(preset.id, "eventPath", value)} /><Field label="文本路径" value={profile.textPath || ""} onChange={(value) => onUpdate(preset.id, "textPath", value)} /><Field label="增量事件" value={profile.partialEvent || ""} onChange={(value) => onUpdate(preset.id, "partialEvent", value)} /><Field label="最终事件" value={profile.finalEvent || ""} onChange={(value) => onUpdate(preset.id, "finalEvent", value)} /><Field label="错误事件" value={profile.errorEvent || ""} onChange={(value) => onUpdate(preset.id, "errorEvent", value)} /></div><label>初始化消息 JSON</label><textarea rows={3} value={profile.initMessage || ""} onChange={(event) => onUpdate(preset.id, "initMessage", event.target.value)} /><label>JSON/Base64 音频模板（使用 {'{{base64}}'}）</label><textarea rows={2} value={profile.audioTemplate || ""} onChange={(event) => onUpdate(preset.id, "audioTemplate", event.target.value)} /><label>结束 / Flush 消息 JSON</label><textarea rows={2} value={profile.finalizeMessage || ""} onChange={(event) => onUpdate(preset.id, "finalizeMessage", event.target.value)} /></details>
+            <details><summary>高级协议与稳定性</summary><p className="config-note">断线时最多重连指定次数，音频缓存有上限；最终事件会自动去重。</p><div className="form-grid three"><Field label="音频封装" value={profile.audioMode} onChange={(value) => onUpdate(preset.id, "audioMode", value as AsrProviderConfig["audioMode"])} select={[["binary", "原始二进制 PCM"], ["json-base64", "JSON Base64"]]} /><Field label="重连次数" value={String(profile.reconnectAttempts ?? 2)} onChange={(value) => onUpdate(preset.id, "reconnectAttempts", Number(value) || 0)} /><Field label="重连间隔（ms）" value={String(profile.reconnectDelayMs ?? 800)} onChange={(value) => onUpdate(preset.id, "reconnectDelayMs", Number(value) || 800)} /><Field label="音频队列上限" value={String(profile.audioQueueLimit ?? 24)} onChange={(value) => onUpdate(preset.id, "audioQueueLimit", Number(value) || 24)} /><Field label="事件路径" value={profile.eventPath || ""} onChange={(value) => onUpdate(preset.id, "eventPath", value)} /><Field label="文本路径" value={profile.textPath || ""} onChange={(value) => onUpdate(preset.id, "textPath", value)} /><Field label="增量事件" value={profile.partialEvent || ""} onChange={(value) => onUpdate(preset.id, "partialEvent", value)} /><Field label="最终事件" value={profile.finalEvent || ""} onChange={(value) => onUpdate(preset.id, "finalEvent", value)} /><Field label="错误事件" value={profile.errorEvent || ""} onChange={(value) => onUpdate(preset.id, "errorEvent", value)} /></div><label>初始化消息 JSON</label><textarea rows={3} value={profile.initMessage || ""} onChange={(event) => onUpdate(preset.id, "initMessage", event.target.value)} /><label>JSON/Base64 音频模板（使用 {'{{base64}}'}）</label><textarea rows={2} value={profile.audioTemplate || ""} onChange={(event) => onUpdate(preset.id, "audioTemplate", event.target.value)} /><label>结束 / Flush 消息 JSON</label><textarea rows={2} value={profile.finalizeMessage || ""} onChange={(event) => onUpdate(preset.id, "finalizeMessage", event.target.value)} /><label>额外请求头 JSON</label><textarea rows={3} value={profile.extraHeaders || ""} onChange={(event) => onUpdate(preset.id, "extraHeaders", event.target.value)} placeholder='{"X-Trace": "interview-lab"}' /><p className="config-warning">浏览器 WebSocket 不允许自定义握手 Header；这里的值会安全保存并展示，但当前实时适配器不会把它们附加到握手中。需要 Header 鉴权的 Provider 仍需使用 URL 参数、初始化消息或原生适配器。</p></details>
             <label className="checkbox"><input type="checkbox" checked={profile.debug} onChange={(event) => onUpdate(preset.id, "debug", event.target.checked)} />显示原始消息调试日志</label>
             <div className="config-preview"><div><strong>asr.toml 预览</strong><span>{revealCredential ? "当前凭证可见" : "凭证默认隐藏"}</span></div><textarea readOnly rows={8} value={asrConfigPreview(profile, revealCredential)} /><label className="checkbox"><input type="checkbox" checked={revealCredential} onChange={(event) => setRevealedPresetIds((ids) => event.target.checked ? [...ids, preset.id] : ids.filter((id) => id !== preset.id))} />显示当前 Key / AppKey</label></div>
           </div>}
@@ -1736,13 +1747,42 @@ function LlmProfileEditor({ profile, models, modelState, focus, onUpdate, onAppl
   const [tab, setTab] = useState<LlmEditorTab>("basic");
   const [rawDraft, setRawDraft] = useState<string | undefined>(undefined);
   const [rawError, setRawError] = useState("");
+  const [tomlDraft, setTomlDraft] = useState<string | undefined>(undefined);
+  const [tomlError, setTomlError] = useState("");
   const [revealCredential, setRevealCredential] = useState(false);
   useEffect(() => {
     setTab("basic");
     setRawDraft(undefined);
     setRawError("");
+    setTomlDraft(undefined);
+    setTomlError("");
     setRevealCredential(false);
   }, [profile.id]);
+
+  function applyProfileConfig(source: Record<string, unknown>) {
+    const providerValue = source.provider ?? source.preset;
+    const providerId = isLlmProviderPreset(providerValue)
+      ? providerValue
+      : typeof providerValue === "string"
+        ? LLM_PROVIDER_PRESETS.find((preset) => preset.label === providerValue)?.id
+        : undefined;
+    if (providerId) onApplyPreset(providerId);
+    if (typeof source.name === "string") onUpdate("name", source.name);
+    if (typeof source.base_url === "string") onUpdate("baseUrl", source.base_url);
+    if (typeof source.model === "string") onUpdate("model", source.model);
+    if (source.api_key !== undefined && source.api_key !== "********" && typeof source.api_key === "string") onUpdate("apiKey", source.api_key === "未填写" ? "" : source.api_key);
+    if (source.protocol === "responses" || source.protocol === "chat-completions") onUpdate("protocol", source.protocol);
+    if (typeof source.request_path === "string") onUpdate("requestPath", source.request_path);
+    if (typeof source.usage_path === "string") onUpdate("usagePath", source.usage_path);
+    if (typeof source.context_window === "number" && Number.isFinite(source.context_window)) onUpdate("contextWindow", Math.max(1000, Math.round(source.context_window)));
+    if (typeof source.context_window === "string") {
+      const parsedWindow = parseContextWindow(source.context_window);
+      if (parsedWindow) onUpdate("contextWindow", parsedWindow);
+    }
+    if (source.answer_detail === "concise" || source.answer_detail === "balanced" || source.answer_detail === "detailed") onUpdate("answerDetail", source.answer_detail);
+    if (source.reasoning_effort === "none" || source.reasoning_effort === "low" || source.reasoning_effort === "medium" || source.reasoning_effort === "high") onUpdate("reasoningEffort", source.reasoning_effort);
+    if (typeof source.extra_headers === "string") onUpdate("extraHeaders", mergeStoredHeaderConfig(source.extra_headers, profile.extraHeaders));
+  }
 
   function applyRawConfig() {
     let parsed: unknown;
@@ -1756,28 +1796,25 @@ function LlmProfileEditor({ profile, models, modelState, focus, onUpdate, onAppl
       setRawError("原始配置必须是 JSON 对象。");
       return;
     }
-    const source = parsed as Record<string, unknown>;
-    if (isLlmProviderPreset(source.provider) || isLlmProviderPreset(source.preset)) onApplyPreset((source.provider ?? source.preset) as LlmProviderPresetId);
-    if (typeof source.name === "string") onUpdate("name", source.name);
-    if (typeof source.base_url === "string") onUpdate("baseUrl", source.base_url);
-    if (typeof source.model === "string") onUpdate("model", source.model);
-    if (source.api_key !== undefined && source.api_key !== "********" && typeof source.api_key === "string") onUpdate("apiKey", source.api_key);
-    if (source.protocol === "responses" || source.protocol === "chat-completions") onUpdate("protocol", source.protocol);
-    if (typeof source.request_path === "string") onUpdate("requestPath", source.request_path);
-    if (typeof source.usage_path === "string") onUpdate("usagePath", source.usage_path);
-    if (typeof source.context_window === "number" && Number.isFinite(source.context_window)) onUpdate("contextWindow", Math.max(1000, Math.round(source.context_window)));
-    if (typeof source.context_window === "string") {
-      const parsedWindow = parseContextWindow(source.context_window);
-      if (parsedWindow) onUpdate("contextWindow", parsedWindow);
-    }
-    if (source.answer_detail === "concise" || source.answer_detail === "balanced" || source.answer_detail === "detailed") onUpdate("answerDetail", source.answer_detail);
-    if (source.reasoning_effort === "none" || source.reasoning_effort === "low" || source.reasoning_effort === "medium" || source.reasoning_effort === "high") onUpdate("reasoningEffort", source.reasoning_effort);
-    if (typeof source.extra_headers === "string") onUpdate("extraHeaders", source.extra_headers);
+    applyProfileConfig(parsed as Record<string, unknown>);
     setRawDraft(undefined);
     setRawError("");
   }
 
-  const tabs: Array<[LlmEditorTab, string]> = [["basic", "基础配置"], ["parameters", "模型参数"], ["advanced", "高级请求"], ["raw", "原始 JSON"]];
+  function applyTomlConfig() {
+    let parsed: Record<string, SimpleTomlValue>;
+    try {
+      parsed = parseSimpleToml(tomlDraft ?? profileConfigPreview(profile, focus, revealCredential));
+    } catch (error) {
+      setTomlError(error instanceof Error ? error.message : "config.toml 不是合法的简单 TOML 配置。");
+      return;
+    }
+    applyProfileConfig(parsed);
+    setTomlDraft(undefined);
+    setTomlError("");
+  }
+
+  const tabs: Array<[LlmEditorTab, string]> = [["basic", "基础配置"], ["parameters", "模型参数"], ["advanced", "高级请求"], ["raw", "原始 JSON"], ["toml", "config.toml"]];
   return <div className="provider-card-editor">
     <div className="editor-tabs" role="tablist" aria-label="模型配置编辑标签">{tabs.map(([value, label]) => <button key={value} className={tab === value ? "active" : ""} role="tab" aria-selected={tab === value} onClick={() => setTab(value)}>{label}</button>)}</div>
     {tab === "basic" && <>
@@ -1787,7 +1824,8 @@ function LlmProfileEditor({ profile, models, modelState, focus, onUpdate, onAppl
     </>}
     {tab === "parameters" && <div className="form-grid"><Field label="回答精细程度" value={profile.answerDetail || "balanced"} onChange={(value) => onUpdate("answerDetail", value as LlmProfile["answerDetail"])} select={[["concise", "简洁"], ["balanced", "标准"], ["detailed", "详细"]]} /><Field label="思考深度" value={profile.reasoningEffort || "none"} onChange={(value) => onUpdate("reasoningEffort", value as LlmProfile["reasoningEffort"])} select={[["none", "不指定"], ["low", "低"], ["medium", "中"], ["high", "高"]]} /></div>}
     {tab === "advanced" && <><label>自定义请求路径（可选）</label><input value={profile.requestPath || ""} onChange={(event) => onUpdate("requestPath", event.target.value)} placeholder="/chat/completions" /><label>用量查询路径（可选）</label><input value={profile.usagePath || ""} onChange={(event) => onUpdate("usagePath", event.target.value)} placeholder="/usage 或完整 HTTPS 地址" /><p className="config-note">配置后可在 Provider 卡片点击“用量”；不同服务商接口不同，未配置时不会发送查询请求。</p><label>额外请求头 JSON</label><textarea rows={4} value={profile.extraHeaders || ""} onChange={(event) => onUpdate("extraHeaders", event.target.value)} placeholder='{"X-Trace": "interview-lab"}' /><p className="config-note">请求头必须是合法 JSON 对象；错误会在连接测试时明确提示。</p></>}
-    {tab === "raw" && <><div className="config-preview raw-config-preview"><div><strong>可编辑原始 JSON</strong><span>{revealCredential ? "api_key 当前可见" : "api_key 默认隐藏"}</span></div><textarea rows={14} value={rawDraft ?? profileRawConfig(profile, focus, revealCredential)} onChange={(event) => { setRawDraft(event.target.value); setRawError(""); }} /><div className="raw-config-actions"><button className="primary" onClick={applyRawConfig}>应用原始配置</button><button onClick={() => { setRawDraft(profileRawConfig(profile, focus, revealCredential)); setRawError(""); }}>重置草稿</button></div><label className="checkbox"><input type="checkbox" checked={revealCredential} onChange={(event) => { setRevealCredential(event.target.checked); setRawDraft(undefined); }} />显示当前 Key</label>{rawError && <p className="provider-inline-error">{rawError}</p>}</div><div className="config-preview"><div><strong>config.toml 预览</strong><span>{revealCredential ? "当前凭证可见" : "凭证默认隐藏"}</span></div><textarea readOnly rows={8} value={profileConfigPreview(profile, focus, revealCredential)} /></div></>}
+    {tab === "raw" && <div className="config-preview raw-config-preview"><div><strong>可编辑原始 JSON</strong><span>{revealCredential ? "api_key 当前可见" : "api_key 默认隐藏"}</span></div><textarea rows={14} value={rawDraft ?? profileRawConfig(profile, focus, revealCredential)} onChange={(event) => { setRawDraft(event.target.value); setRawError(""); }} /><div className="raw-config-actions"><button className="primary" onClick={applyRawConfig}>应用原始配置</button><button onClick={() => { setRawDraft(profileRawConfig(profile, focus, revealCredential)); setRawError(""); }}>重置草稿</button></div><label className="checkbox"><input type="checkbox" checked={revealCredential} onChange={(event) => { setRevealCredential(event.target.checked); setRawDraft(undefined); setTomlDraft(undefined); }} />显示当前 Key</label>{rawError && <p className="provider-inline-error">{rawError}</p>}</div>}
+    {tab === "toml" && <div className="config-preview raw-config-preview"><div><strong>可编辑 config.toml</strong><span>{revealCredential ? "凭证当前可见" : "凭证默认隐藏"}</span></div><textarea rows={16} value={tomlDraft ?? profileConfigPreview(profile, focus, revealCredential)} onChange={(event) => { setTomlDraft(event.target.value); setTomlError(""); }} /><div className="raw-config-actions"><button className="primary" onClick={applyTomlConfig}>应用 TOML</button><button onClick={() => { setTomlDraft(profileConfigPreview(profile, focus, revealCredential)); setTomlError(""); }}>重置草稿</button></div><label className="checkbox"><input type="checkbox" checked={revealCredential} onChange={(event) => { setRevealCredential(event.target.checked); setRawDraft(undefined); setTomlDraft(undefined); }} />显示当前 Key</label><p className="config-note">Provider 使用稳定 ID；`api_key` 和敏感请求头为脱敏占位符时，应用后会保留本机已保存凭证。</p>{tomlError && <p className="provider-inline-error">{tomlError}</p>}</div>}
     {modelState.status === "error" && <p className="provider-inline-error">{modelState.message}</p>}
   </div>;
 }

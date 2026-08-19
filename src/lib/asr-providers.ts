@@ -1,6 +1,8 @@
 import type { AsrPreset, AsrProviderConfig } from "../types";
 import { createAsrPreset } from "../types";
 import { GenericAsrSession } from "./asr";
+import { sanitizeHeaderConfig } from "./llm";
+import { serializeSimpleToml, type SimpleTomlValue } from "./toml";
 
 export interface AsrProviderPreset {
   id: AsrPreset;
@@ -117,15 +119,19 @@ export function classifyAsrError(error: unknown): ClassifiedAsrError {
 }
 
 export function asrConfigPreview(config: AsrProviderConfig, revealKey = false) {
-  return `provider = "${asrProviderLabel(config)}"
-protocol = "${config.protocol || "generic"}"
-ws_url = "${config.wsUrl || "未填写"}"
-audio_mode = "${config.audioMode}"
-timeout_ms = ${config.timeoutMs}
-api_key = "${config.apiKey ? revealKey ? config.apiKey : "********" : "未填写"}"
-app_key = "${config.appKey ? revealKey ? config.appKey : "********" : "未填写"}"
-app_id = "${config.appId || "未填写"}"
-cluster = "${config.cluster || "未填写"}"`;
+  const values: Record<string, SimpleTomlValue> = {
+    provider: config.preset ?? config.protocol ?? "generic",
+    protocol: config.protocol || "generic",
+    ws_url: config.wsUrl || "",
+    audio_mode: config.audioMode,
+    timeout_ms: config.timeoutMs,
+    api_key: config.apiKey ? revealKey ? config.apiKey : "********" : "",
+    app_key: config.appKey ? revealKey ? config.appKey : "********" : "",
+    app_id: config.appId || "",
+    cluster: config.cluster || "",
+    extra_headers: sanitizeHeaderConfig(config.extraHeaders, revealKey),
+  };
+  return serializeSimpleToml(values);
 }
 
 function asrTestCallbacks(finalText: (value: string) => void, errorText: (value: string) => void) {

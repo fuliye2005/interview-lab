@@ -18,9 +18,12 @@ describe("ASR provider presets", () => {
   });
 
   it("keeps secrets out of the configuration preview", () => {
-    const config = { ...createAsrPreset("generic"), apiKey: "secret-token" };
+    const config = { ...createAsrPreset("generic"), apiKey: "secret-token", extraHeaders: JSON.stringify({ Authorization: "Bearer header-secret", "X-Trace": "trace" }) };
     expect(asrConfigPreview(config)).toContain('api_key = "********"');
     expect(asrConfigPreview(config)).not.toContain("secret-token");
+    expect(asrConfigPreview(config)).toContain('provider = "generic"');
+    expect(asrConfigPreview(config)).toContain('Authorization\\": \\"********');
+    expect(asrConfigPreview(config)).toContain("trace");
   });
 });
 
