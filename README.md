@@ -54,3 +54,4 @@ npm run tauri:build:exe
 
 `npm run tauri:build:exe` 只生成 `src-tauri/target/release/tauri-app.exe`，不会生成安装包。
 只有明确需要安装包时才运行 `npm run tauri:build:installer`；该命令才会生成 NSIS/MSI。
+GitHub Actions 的 `main` 推送同样只构建 EXE；需要云端安装包时，手动运行工作流并勾选 `build_installer`。
