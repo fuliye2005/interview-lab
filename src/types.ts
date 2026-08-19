@@ -137,6 +137,24 @@ export interface InterviewContextTurn extends InterviewTurn {
   included: boolean;
 }
 
+export interface InterviewDraft {
+  active: boolean;
+  sessionMode: "all" | "asr" | "answer";
+  testMode: "all" | "asr" | "answer";
+  paused: boolean;
+  question: string;
+  partial: string;
+  answer: string;
+  answerStatus: AnswerStatus;
+  lastQuestion: string;
+  turns: InterviewTurn[];
+  contextTurns: InterviewContextTurn[];
+  completeHistoryCount: number;
+  contextStats: { total: number; sent: number; omitted: number };
+  frameworkOverride: AnswerFramework | "";
+  savedAt: string;
+}
+
 export interface InterviewSession {
   id: string;
   title: string;
@@ -150,6 +168,7 @@ export interface InterviewSession {
   stageSummary?: string;
   lastContextTurnCount?: number;
   lastOmittedTurnCount?: number;
+  draft?: InterviewDraft;
 }
 
 export interface WheelScrollSettings {

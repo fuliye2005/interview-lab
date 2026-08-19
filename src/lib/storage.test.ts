@@ -63,6 +63,30 @@ describe("loadHistory", () => {
       expect.objectContaining({ id: "turn-2", contextIncluded: false, pinned: false }),
     ]);
   });
+
+  it("keeps a resumable unfinished interview draft across reloads", () => {
+    setStoredHistory([{ id: "session-draft", title: "未完成的一面", createdAt: "2026-08-19T08:00:00.000Z", updatedAt: "2026-08-19T08:02:00.000Z", asrName: "ASR", llmName: "LLM", carriedTurnCount: 1, turns: [], draft: {
+      active: true,
+      sessionMode: "answer",
+      testMode: "answer",
+      paused: false,
+      question: "请继续这个问题",
+      partial: "",
+      answer: "上一次已经生成的回答",
+      answerStatus: "complete",
+      lastQuestion: "上一问",
+      turns: [{ id: "turn-1", question: "上一问", answer: "上一答" }],
+      contextTurns: [{ id: "turn-1", sessionId: "session-draft", question: "上一问", answer: "上一答", included: true, pinned: true }],
+      completeHistoryCount: 1,
+      contextStats: { total: 1, sent: 1, omitted: 0 },
+      frameworkOverride: "star",
+      savedAt: "2026-08-19T08:02:00.000Z",
+    } }]);
+
+    const session = loadHistory()[0];
+
+    expect(session?.draft).toMatchObject({ active: true, sessionMode: "answer", question: "请继续这个问题", turns: [{ id: "turn-1" }], contextStats: { sent: 1 } });
+  });
 });
 
 describe("loadSettings", () => {

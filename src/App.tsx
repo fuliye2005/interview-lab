@@ -16,7 +16,7 @@ import { detectRuntimeEnvironment } from "./lib/runtime";
 import { formatShortcut, shortcutKeyToken, toGlobalShortcut } from "./lib/shortcut";
 import { clearHistory, createSafeDataBundle, defaultSettings, emptyMaterials, getStorageDiagnostics, initializeStorage, loadHistory, loadMaterials, loadSettings, markCleanShutdown, mergeStoredHeaderConfig, parseSafeDataBundle, restoreLatestBackup, saveHistory, saveMaterials, saveSettings, saveSnapshot } from "./lib/storage";
 import type { StorageDiagnostics } from "./lib/storage";
-import type { AnswerFramework, AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, InterviewContextTurn, InterviewFocus, InterviewSession, InterviewTurn, LlmHealth, LlmProfile, LlmProviderPresetId, MaterialContext, OverlayLayout, OverlaySettings, SessionRecord, WheelScrollSettings } from "./types";
+import type { AnswerFramework, AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, InterviewContextTurn, InterviewDraft, InterviewFocus, InterviewSession, InterviewTurn, LlmHealth, LlmProfile, LlmProviderPresetId, MaterialContext, OverlayLayout, OverlaySettings, SessionRecord, WheelScrollSettings } from "./types";
 import { ANSWER_FRAMEWORK_LABELS, createAsrPreset, createDefaultLlmProfile, INTERVIEW_FOCUS_LABELS } from "./types";
 import "./App.css";
 import "./theme.css";
@@ -318,6 +318,7 @@ function App() {
   const [materials, setMaterials] = useState<MaterialContext>(() => desktopRuntime && !isOverlayWindow ? emptyMaterials() : loadMaterials());
   const [history, setHistory] = useState<InterviewSession[]>(() => desktopRuntime && !isOverlayWindow ? [] : loadHistory());
   const [storageReady, setStorageReady] = useState(!desktopRuntime || isOverlayWindow);
+  const [draftHydrated, setDraftHydrated] = useState(!desktopRuntime || isOverlayWindow);
   const [storageError, setStorageError] = useState("");
   const [storageDiagnostics, setStorageDiagnostics] = useState<StorageDiagnostics | null>(null);
   const [storageBundleBusy, setStorageBundleBusy] = useState(false);
@@ -359,6 +360,7 @@ function App() {
   const overlayBoundWindowRef = useRef<WebviewWindow | null>(null);
   const overlayUnlistenRef = useRef<Array<() => void>>([]);
   const overlayStatePersistTimerRef = useRef<number | undefined>(undefined);
+  const draftPersistTimerRef = useRef<number | undefined>(undefined);
   const overlayActionsRef = useRef<{ start: (mode: TestMode) => void; submit: () => void; stop: () => void; pause: () => void; stopGeneration: () => void; regenerate: () => void }>({ start: () => {}, submit: () => {}, stop: () => {}, pause: () => {}, stopGeneration: () => {}, regenerate: () => {} });
   const closeToTrayRef = useRef(true);
   const generationAbortRef = useRef<AbortController | null>(null);
@@ -368,6 +370,8 @@ function App() {
   const activeSessionIdRef = useRef("");
   const loadedContextRef = useRef<InterviewContextTurn[]>([]);
   const loadedSourceSessionIdRef = useRef<string | undefined>(undefined);
+  const draftRef = useRef<InterviewDraft | undefined>(undefined);
+  const draftRestoreAttemptedRef = useRef(false);
   const activeProfile = useMemo(() => settings.llmProfiles.find((item) => item.id === settings.activeLlmProfileId) ?? settings.llmProfiles[0], [settings]);
   const visibleHistory = useMemo(() => {
     const query = historyQuery.trim().toLocaleLowerCase();
@@ -442,8 +446,11 @@ function App() {
       setSettings(snapshot.settings);
       setMaterials(snapshot.materials);
       setHistory(snapshot.history);
+      draftRestoreAttemptedRef.current = true;
+      restoreRecoverableDraft(snapshot.history);
       setStorageError("");
       setStorageReady(true);
+      setDraftHydrated(true);
     }).catch((error) => {
       if (cancelled) return;
       const message = error instanceof Error
@@ -459,12 +466,44 @@ function App() {
             })();
       setStorageError(message);
       setNotice(`本机数据加载失败：${message}。已暂停保存，避免覆盖现有配置。`);
+      setDraftHydrated(true);
     });
     return () => { cancelled = true; };
   }, [desktopRuntime, isOverlayWindow]);
+  useEffect(() => {
+    if (desktopRuntime || isOverlayWindow || !draftHydrated || draftRestoreAttemptedRef.current) return;
+    draftRestoreAttemptedRef.current = true;
+    restoreRecoverableDraft(history);
+  }, [desktopRuntime, isOverlayWindow, draftHydrated, history]);
   useEffect(() => { if (storageReady && !isOverlayWindow) void saveSettings(settings); }, [settings, storageReady, isOverlayWindow]);
   useEffect(() => { if (storageReady && !isOverlayWindow) void saveMaterials(materials); }, [materials, storageReady, isOverlayWindow]);
   useEffect(() => { if (storageReady && !isOverlayWindow) void saveHistory(history); }, [history, storageReady, isOverlayWindow]);
+  useEffect(() => {
+    if (!storageReady || !draftHydrated || isOverlayWindow || !sessionActive || !activeSessionIdRef.current) return;
+    if (draftPersistTimerRef.current) window.clearTimeout(draftPersistTimerRef.current);
+    draftPersistTimerRef.current = window.setTimeout(() => {
+      draftPersistTimerRef.current = undefined;
+      persistActiveDraft({
+        sessionMode: sessionMode === "idle" ? testMode : sessionMode,
+        testMode,
+        paused: sessionPaused,
+        question,
+        partial,
+        answer,
+        answerStatus,
+        lastQuestion: lastQuestionRef.current,
+        turns: interviewTurnsRef.current.slice(),
+        contextTurns: loadedContextRef.current.slice(),
+        completeHistoryCount: completeHistoryCountRef.current,
+        contextStats,
+        frameworkOverride: sessionFrameworkOverride,
+      });
+    }, 650);
+    return () => {
+      if (draftPersistTimerRef.current) window.clearTimeout(draftPersistTimerRef.current);
+      draftPersistTimerRef.current = undefined;
+    };
+  }, [storageReady, draftHydrated, isOverlayWindow, sessionActive, sessionMode, testMode, sessionPaused, question, partial, answer, answerStatus, contextStats, sessionFrameworkOverride]);
   useEffect(() => {
     if (!storageReady || isOverlayWindow) return;
     void getStorageDiagnostics().then(setStorageDiagnostics);
@@ -768,7 +807,78 @@ function App() {
   function promptTurnsForContext(context: InterviewContextTurn[]): InterviewTurn[] {
     return context.filter((turn) => turn.included).map(({ id, question, answer, pinned }) => ({ id, question, answer, pinned }));
   }
-  function beginInterview() {
+  function restoreRecoverableDraft(sessions: InterviewSession[]) {
+    const session = sessions.find((item) => item.draft?.active);
+    const draft = session?.draft;
+    if (!session || !draft) return false;
+    const context = draft.contextTurns.length ? draft.contextTurns : interviewContextForSession(session.id, sessions);
+    const restoredMode = draft.sessionMode;
+    const restoredAnswerStatus: AnswerStatus = draft.answerStatus === "generating" ? "idle" : draft.answerStatus;
+    activeSessionIdRef.current = session.id;
+    setActiveSessionTitle(session.title);
+    setActiveSessionSourceTitle(session.sourceSessionId ? sessions.find((item) => item.id === session.sourceSessionId)?.title || "" : "");
+    setActiveSessionCarriedTurnCount(session.carriedTurnCount || 0);
+    setSessionActive(true);
+    setSessionMode(restoredMode);
+    setTestMode(draft.testMode);
+    setSessionPaused(restoredMode === "answer" ? draft.paused : true);
+    setAsrStatus("idle");
+    setAnswerStatus(restoredAnswerStatus);
+    setPartial(draft.partial);
+    setAnswer(draft.answer);
+    questionRef.current = draft.question;
+    lastQuestionRef.current = draft.lastQuestion;
+    setQuestion(draft.question);
+    loadedContextRef.current = context;
+    setPendingContextTurns(context);
+    loadedSourceSessionIdRef.current = session.sourceSessionId;
+    interviewTurnsRef.current = draft.turns.length ? draft.turns : promptTurnsForContext(context);
+    completeHistoryCountRef.current = draft.completeHistoryCount || context.length;
+    setTurnCount(interviewTurnsRef.current.length);
+    setContextStats(draft.contextStats);
+    setSessionFrameworkOverride(draft.frameworkOverride || "");
+    draftRef.current = draft;
+    const statusHint = restoredMode === "answer"
+      ? "已恢复上次未完成的面试会话，可以继续输入并提交问题。"
+      : "已恢复上次未完成的面试会话，当前处于暂停状态；点击“继续”后重新连接 ASR。";
+    setNotice(draft.answerStatus === "generating" ? `${statusHint} 上次未完成回答已保留。` : statusHint);
+    return true;
+  }
+  function persistActiveDraft(patch: Partial<InterviewDraft>) {
+    const sessionId = activeSessionIdRef.current;
+    if (!sessionId) return;
+    const current = draftRef.current ?? {
+      active: true,
+      sessionMode: "answer" as const,
+      testMode: testModeRef.current,
+      paused: false,
+      question: questionRef.current,
+      partial: "",
+      answer: "",
+      answerStatus: "idle" as const,
+      lastQuestion: lastQuestionRef.current,
+      turns: interviewTurnsRef.current,
+      contextTurns: loadedContextRef.current,
+      completeHistoryCount: completeHistoryCountRef.current,
+      contextStats,
+      frameworkOverride: sessionFrameworkOverride,
+      savedAt: new Date().toISOString(),
+    } satisfies InterviewDraft;
+    const next = { ...current, ...patch, active: true, savedAt: new Date().toISOString() };
+    draftRef.current = next;
+    setHistory((items) => items.map((session) => session.id === sessionId ? { ...session, draft: next, updatedAt: next.savedAt } : session));
+  }
+
+  function updateCurrentQuestion(value: string) {
+    questionRef.current = value;
+    setQuestion(value);
+  }
+
+  function updateCurrentPartial(value: string) {
+    setPartial(value);
+  }
+
+  function beginInterview(draftMode: TestMode = testModeRef.current) {
     const now = new Date().toISOString();
     const carriedContext = loadedContextRef.current.filter((turn) => turn.included);
     const carriedTurns = promptTurnsForContext(carriedContext);
@@ -788,13 +898,37 @@ function App() {
       lastContextTurnCount: carriedTurns.length,
       lastOmittedTurnCount: 0,
     };
+    const draft: InterviewDraft = {
+      active: true,
+      sessionMode: draftMode,
+      testMode: draftMode,
+      paused: false,
+      question: "",
+      partial: "",
+      answer: "",
+      answerStatus: "idle",
+      lastQuestion: "",
+      turns: carriedTurns,
+      contextTurns: carriedContext,
+      completeHistoryCount: carriedContext.length,
+      contextStats: { total: carriedContext.length, sent: carriedTurns.length, omitted: 0 },
+      frameworkOverride: sessionFrameworkOverride,
+      savedAt: now,
+    };
+    session.draft = draft;
+    draftRef.current = draft;
     activeSessionIdRef.current = session.id;
     lastQuestionRef.current = "";
+    questionRef.current = "";
+    setQuestion("");
+    setPartial("");
+    setAnswer("");
+    setAnswerStatus("idle");
     setActiveSessionTitle(title);
     setActiveSessionSourceTitle(sourceTitle);
     setActiveSessionCarriedTurnCount(carriedTurns.length);
     interviewTurnsRef.current = carriedTurns;
-    loadedContextRef.current = [];
+    loadedContextRef.current = carriedContext;
     setPendingContextTurns([]);
     loadedSourceSessionIdRef.current = undefined;
     completeHistoryCountRef.current = carriedContext.length;
@@ -809,10 +943,23 @@ function App() {
     setHistory((items) => items.map((session) => {
       if (session.id !== sessionId) return session;
       const turns = [...session.turns, { ...record, contextIncluded: record.contextIncluded !== false, pinned: Boolean(record.pinned) }];
+      const nextDraft = draftRef.current
+        ? {
+            ...draftRef.current,
+            question: "",
+            partial: "",
+            answer: record.answer || draftRef.current.answer,
+            answerStatus: record.error ? "error" as const : "complete" as const,
+            turns: interviewTurnsRef.current.slice(),
+            savedAt: record.createdAt,
+          }
+        : session.draft;
+      if (nextDraft) draftRef.current = nextDraft;
       return {
         ...session,
         updatedAt: record.createdAt,
         turns,
+        draft: nextDraft,
         stageSummary: session.stageSummary?.trim() ? session.stageSummary : makeStageSummary(turns),
       };
     }));
@@ -845,7 +992,8 @@ function App() {
     setHistory((items) => items.map((session) => session.id === sessionId
       ? { ...session, updatedAt: new Date().toISOString(), turns: session.turns.map((turn) => turn.id === turnId ? { ...turn, ...patch } : turn) }
       : session));
-    if (patch.question !== undefined || patch.answer !== undefined) {
+    const updatesCurrentContext = activeSessionIdRef.current === sessionId || loadedSourceSessionIdRef.current === sessionId;
+    if (updatesCurrentContext && (patch.question !== undefined || patch.answer !== undefined)) {
       const nextContext = loadedContextRef.current.map((turn) => turn.id === turnId
         ? { ...turn, ...(patch.question !== undefined ? { question: patch.question } : {}), ...(patch.answer !== undefined ? { answer: patch.answer } : {}) }
         : turn);
@@ -860,6 +1008,7 @@ function App() {
   }
   function updateHistoryContext(sessionId: string, turnId: string, patch: Pick<SessionRecord, "contextIncluded" | "pinned">) {
     updateHistoryTurn(sessionId, turnId, patch);
+    if (activeSessionIdRef.current !== sessionId && loadedSourceSessionIdRef.current !== sessionId) return;
     setPendingContextTurns((items) => items.map((turn) => turn.id === turnId ? { ...turn, included: patch.contextIncluded ?? turn.included, pinned: patch.pinned ?? Boolean(turn.pinned) } : turn));
     loadedContextRef.current = loadedContextRef.current.map((turn) => turn.id === turnId ? { ...turn, included: patch.contextIncluded ?? turn.included, pinned: patch.pinned ?? Boolean(turn.pinned) } : turn);
     const nextContext = loadedContextRef.current;
@@ -873,7 +1022,7 @@ function App() {
     setHistory((items) => items.map((item) => item.id === session.id ? { ...item, stageSummary: summary, updatedAt: new Date().toISOString() } : item));
   }
 
-  async function startSession(mode: Exclude<TestMode, "answer">) {
+  async function startAsrSession(mode: Exclude<TestMode, "answer">, resumeExisting = false) {
     if (!desktopRuntime) {
       setAsrStatus("error");
       setNotice("当前是网页预览环境，无法调用系统音频采集。请从安装后的 Interview Lab 桌面程序打开，再测试语音转文字。");
@@ -886,12 +1035,11 @@ function App() {
     }
     const asr = new GenericAsrSession(settings.asr, {
       onStatus: (status) => setAsrStatus(status),
-      onPartial: setPartial,
+      onPartial: updateCurrentPartial,
       onFinal: (text) => {
         const completeQuestion = questionRef.current ? `${questionRef.current}${text}` : text;
-        questionRef.current = completeQuestion;
-        setQuestion(completeQuestion);
-        setPartial("");
+        updateCurrentQuestion(completeQuestion);
+        updateCurrentPartial("");
         if (pendingRef.current && mode === "all") void generateAnswer(completeQuestion);
         if (pendingRef.current && mode === "asr") {
           pendingRef.current = false;
@@ -906,23 +1054,26 @@ function App() {
       await asr.connect();
       asrRef.current = asr;
       await invoke("start_system_audio_capture");
-      beginInterview();
+      if (!resumeExisting) beginInterview(mode);
       setSessionActive(true);
       setSessionPaused(false);
       setSessionMode(mode);
       setAsrStatus("listening");
-      setNotice(mode === "asr" ? "正在捕获系统音频并进行语音转文字。原始音频不会保存。" : materials.confirmed ? "正在捕获默认系统输出并发送给 ASR。原始音频不会保存。" : "正在捕获系统音频；未确认候选人材料，将使用通用回答上下文。");
+      setNotice(resumeExisting ? "ASR 已重新连接，当前面试上下文保持不变。" : mode === "asr" ? "正在捕获系统音频并进行语音转文字。原始音频不会保存。" : materials.confirmed ? "正在捕获默认系统输出并发送给 ASR。原始音频不会保存。" : "正在捕获系统音频；未确认候选人材料，将使用通用回答上下文。");
     } catch (error) {
       asr.close();
       setAsrStatus("error");
       setNotice(error instanceof Error ? error.message : "启动会话失败");
     }
   }
+  async function startSession(mode: Exclude<TestMode, "answer">) {
+    await startAsrSession(mode, false);
+  }
   function startAnswerSession() {
     asrRef.current?.close();
     asrRef.current = undefined;
     pendingRef.current = false;
-    beginInterview();
+    beginInterview("answer");
     setSessionActive(true);
     setSessionPaused(false);
     setSessionMode("answer");
@@ -957,7 +1108,14 @@ function App() {
     const wasAsrSession = sessionMode === "asr" || sessionMode === "all";
     asrRef.current?.close(); asrRef.current = undefined;
     if (desktopRuntime && wasAsrSession) await invoke("stop_system_audio_capture").catch(() => undefined);
-    setSessionActive(false); setSessionPaused(false); setSessionMode("idle"); setAsrStatus("idle"); setPartial(""); pendingRef.current = false;
+    const closingSessionId = activeSessionIdRef.current;
+    if (closingSessionId) {
+      setHistory((items) => items.map((session) => session.id === closingSessionId ? { ...session, draft: undefined, updatedAt: new Date().toISOString() } : session));
+    }
+    draftRef.current = undefined;
+    activeSessionIdRef.current = "";
+    questionRef.current = "";
+    setSessionActive(false); setSessionPaused(false); setSessionMode("idle"); setAsrStatus("idle"); setPartial(""); setQuestion(""); pendingRef.current = false;
     setActiveSessionTitle("");
     setActiveSessionSourceTitle("");
     setActiveSessionCarriedTurnCount(0);
@@ -969,8 +1127,13 @@ function App() {
     const nextPaused = !sessionPaused;
     const wasAsrSession = sessionMode === "asr" || sessionMode === "all";
     try {
+      if (!nextPaused && wasAsrSession && !asrRef.current) {
+        await startAsrSession(sessionMode as Exclude<TestMode, "answer">, true);
+        return;
+      }
       if (desktopRuntime && wasAsrSession) await invoke(nextPaused ? "pause_system_audio_capture" : "resume_system_audio_capture");
       setSessionPaused(nextPaused);
+      persistActiveDraft({ paused: nextPaused });
       if (nextPaused) {
         pendingRef.current = false;
         setAsrStatus(sessionMode === "answer" ? "idle" : "listening");
@@ -1038,7 +1201,7 @@ function App() {
         ? { ...session, lastContextTurnCount: contextSelection.turns.length, lastOmittedTurnCount: contextSelection.omittedCount }
         : session));
     }
-    pendingRef.current = false; setQuestion(""); setPartial(""); setAnswer(""); setAnswerStatus("generating"); setAsrStatus("listening");
+    pendingRef.current = false; questionRef.current = ""; setQuestion(""); setPartial(""); setAnswer(""); setAnswerStatus("generating"); setAsrStatus("listening");
     await showOverlay("", false, false);
     let full = "";
     try {
@@ -1061,7 +1224,7 @@ function App() {
         setNotice("已停止生成，当前未完成回答不会写入上下文。");
         return;
       }
-      const message = error instanceof Error ? error.message : "文本模型请求失败";
+      const message = sanitizeLlmError(error, activeProfile.apiKey);
       setAnswerStatus("error"); setNotice(message);
       appendSessionRecord({ id: crypto.randomUUID(), createdAt: new Date().toISOString(), question: finalQuestion, answer: "", asrName: settings.asr.name, llmName: activeProfile.name, error: message });
     } finally {
@@ -1074,6 +1237,7 @@ function App() {
     catch { setNotice("当前环境不允许访问剪贴板，请手动选择回答文本复制。"); }
   }
   function clearCurrentQuestion() {
+    questionRef.current = "";
     setQuestion("");
     setPartial("");
     setAnswer("");
@@ -1256,6 +1420,7 @@ function App() {
         if (payload.command === "start") {
           const mode = payload.testMode ?? testModeRef.current;
           setTestMode(mode);
+          overlayActionsRef.current.start(mode);
         } else if (payload.command === "submit") {
           overlayActionsRef.current.submit();
         } else if (payload.command === "stop") {
@@ -1273,8 +1438,7 @@ function App() {
       listen<{ question: string }>("overlay-question", (event) => {
         if (disposed) return;
         const nextQuestion = event.payload.question ?? "";
-        questionRef.current = nextQuestion;
-        setQuestion(nextQuestion);
+        updateCurrentQuestion(nextQuestion);
       }),
       listen<{ testMode: TestMode }>("overlay-mode", (event) => {
         if (disposed) return;
@@ -1303,7 +1467,7 @@ function App() {
           <div className="field-heading"><label>实时增量转写</label><span className={asrStatus === "listening" ? "live-dot" : ""}>{asrStatus === "listening" ? "正在接收" : "等待开始"}</span></div>
           <div className="transcript scroll-region" onWheel={(event) => { if (!settings.wheelScroll.transcript) event.preventDefault(); }}>{partial || "等待系统音频…"}</div>
           <div className="field-heading"><label>转写结果 / 当前问题</label><button className="text-button" disabled={!question && !partial} onClick={clearCurrentQuestion}>清空</button></div>
-          <textarea rows={6} value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="ASR 最终文本会显示在这里，也可以直接输入问题测试模型。" />
+          <textarea rows={6} value={question} onChange={(event) => updateCurrentQuestion(event.target.value)} placeholder="ASR 最终文本会显示在这里，也可以直接输入问题测试模型。" />
           <div className="session-secondary-controls">
             <div className="interview-context">本次面试上下文：完整 {contextStats.total} 轮 · 本次发送 {contextStats.sent} 轮{contextStats.omitted ? ` · 超出窗口省略 ${contextStats.omitted} 轮` : ""}{sessionActive && activeSessionTitle ? ` · ${activeSessionTitle}` : ""}</div>
             {pendingContextTurns.length > 0 && !sessionActive && <div className="pending-context-strip"><span>下一轮将承接 {pendingContextTurns.filter((turn) => turn.included).length} / {pendingContextTurns.length} 轮</span><button className="text-button" onClick={() => { setSelectedHistorySessionId(loadedSourceSessionIdRef.current); setTab("history"); }}>查看并修改上下文</button></div>}
@@ -1339,12 +1503,12 @@ function App() {
         return <div className="history-detail">
           <div className="panel-head history-detail-header"><div><button className="text-button history-back" onClick={() => setSelectedHistorySessionId(undefined)}>返回会话列表</button><h2>会话详情</h2><p>完整问答保留在这里；载入前可编辑、排除或固定上下文轮次。</p></div><button className="primary" disabled={sessionActive || !carryableCount} onClick={() => loadSessionContext(session)}>载入已选上下文</button></div>
           <label className="history-session-title-editor"><span>会话主题</span><input value={session.title} onChange={(event) => renameHistorySession(session.id, event.target.value)} placeholder="输入这场面试的主题" /></label>
-          <div className="history-meta"><span>创建于 {new Date(session.createdAt).toLocaleString()}</span><span>更新于 {new Date(session.updatedAt).toLocaleString()}</span><span>完整 {session.turns.length} 轮</span><span>可承接 {carryableCount} 轮</span>{pinnedCount > 0 && <span>固定 {pinnedCount} 轮</span>}{session.lastContextTurnCount ? <span>上次发送 {session.lastContextTurnCount} 轮{session.lastOmittedTurnCount ? `，省略 ${session.lastOmittedTurnCount} 轮` : ""}</span> : null}{session.carriedTurnCount > 0 && <span>本场承接 {session.carriedTurnCount} 轮</span>}<span>{session.asrName} → {session.llmName}</span></div>
+           <div className="history-meta"><span>创建于 {new Date(session.createdAt).toLocaleString()}</span><span>更新于 {new Date(session.updatedAt).toLocaleString()}</span><span>完整 {session.turns.length} 轮</span><span>可承接 {carryableCount} 轮</span>{session.draft?.active && <span className="history-draft-badge">未完成草稿</span>}{pinnedCount > 0 && <span>固定 {pinnedCount} 轮</span>}{session.lastContextTurnCount ? <span>上次发送 {session.lastContextTurnCount} 轮{session.lastOmittedTurnCount ? `，省略 ${session.lastOmittedTurnCount} 轮` : ""}</span> : null}{session.carriedTurnCount > 0 && <span>本场承接 {session.carriedTurnCount} 轮</span>}<span>{session.asrName} → {session.llmName}</span></div>
           <div className="history-summary-editor"><div className="history-summary-editor-head"><label>阶段摘要（可编辑）</label><button className="text-button" onClick={() => generateSessionSummary(session)}>根据本场记录生成</button></div><textarea rows={4} value={session.stageSummary || ""} onChange={(event) => updateSessionSummary(session.id, event.target.value)} placeholder="可记录这一轮面试的重点、已确认事实和待追问方向。" /></div>
           <div className="history-context-preview"><div className="history-context-preview-head"><div><strong>载入前上下文</strong><small>勾选“带入”决定下一轮发送内容；固定轮次会优先保留。</small></div><span>{carryableCount} / {contextTurns.length} 轮将承接</span></div>{contextTurns.length ? <div className="context-turn-list">{contextTurns.map((turn, index) => <div className={`context-turn-row ${turn.included ? "included" : "excluded"}`} key={`${turn.sessionId}-${turn.id}`}><span>{index + 1}</span><div><strong>{turn.question}</strong><small>{turn.answer.slice(0, 160)}{turn.answer.length > 160 ? "…" : ""}</small></div><label className="checkbox"><input type="checkbox" checked={turn.included} onChange={(event) => updateHistoryContext(turn.sessionId, turn.id, { contextIncluded: event.target.checked })} />带入</label><label className="checkbox"><input type="checkbox" checked={Boolean(turn.pinned)} disabled={!turn.included} onChange={(event) => updateHistoryContext(turn.sessionId, turn.id, { pinned: event.target.checked })} />固定</label></div>)}</div> : <p className="empty-session">没有可承接的已完成问答。</p>}</div>
-          {session.turns.length ? <div className="history-turn-list">{session.turns.map((turn) => <article className="history-turn" key={turn.id}><div className="history-turn-toolbar"><span className="history-turn-time">{new Date(turn.createdAt).toLocaleString()}</span><label className="checkbox"><input type="checkbox" checked={turn.contextIncluded !== false} disabled={Boolean(turn.error)} onChange={(event) => updateHistoryContext(session.id, turn.id, { contextIncluded: event.target.checked })} />带入上下文</label><label className="checkbox"><input type="checkbox" checked={Boolean(turn.pinned)} disabled={turn.contextIncluded === false || Boolean(turn.error)} onChange={(event) => updateHistoryContext(session.id, turn.id, { pinned: event.target.checked })} />固定</label></div><label className="history-edit-field"><span>面试问题</span><textarea rows={3} value={turn.question} onChange={(event) => updateHistoryTurn(session.id, turn.id, { question: event.target.value })} /></label>{turn.error ? <p className="error">{turn.error}</p> : <label className="history-edit-field"><span>回答</span><textarea rows={6} value={turn.answer} onChange={(event) => updateHistoryTurn(session.id, turn.id, { answer: event.target.value })} /></label>}</article>)}</div> : <p className="empty-session">本次测试尚未提交问题。</p>}
+           {session.turns.length ? <div className="history-turn-list">{session.turns.map((turn) => <article className="history-turn" key={turn.id}><div className="history-turn-toolbar"><span className="history-turn-time">{new Date(turn.createdAt).toLocaleString()}</span><label className="checkbox"><input type="checkbox" checked={turn.contextIncluded !== false} disabled={Boolean(turn.error)} onChange={(event) => updateHistoryContext(session.id, turn.id, { contextIncluded: event.target.checked })} />带入上下文</label><label className="checkbox"><input type="checkbox" checked={Boolean(turn.pinned)} disabled={turn.contextIncluded === false || Boolean(turn.error)} onChange={(event) => updateHistoryContext(session.id, turn.id, { pinned: event.target.checked })} />固定</label></div><label className="history-edit-field"><span>面试问题</span><textarea rows={3} value={turn.question} onChange={(event) => updateHistoryTurn(session.id, turn.id, { question: event.target.value })} /></label>{turn.error ? <p className="error">{turn.error}</p> : <label className="history-edit-field"><span>回答</span><textarea rows={6} value={turn.answer} onChange={(event) => updateHistoryTurn(session.id, turn.id, { answer: event.target.value })} /></label>}</article>)}</div> : <p className="empty-session">本次测试尚未提交问题。</p>}
         </div>;
-      })() : <><div className="panel-head"><div><h2>面试会话记录</h2><p>每次启动测试都会创建一场面试；不保存音频。</p></div><button className="danger" onClick={() => { clearHistory(); setHistory([]); setSelectedHistorySessionId(undefined); setHistoryQuery(""); }}>清空记录</button></div><div className="history-toolbar"><label className="history-search"><span>搜索会话</span><input value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} placeholder="主题、问题、回答、模型或时间" /></label><span>{visibleHistory.length} / {history.length} 场</span>{historyQuery && <button className="text-button" onClick={() => setHistoryQuery("")}>清除搜索</button>}</div>{history.length ? visibleHistory.length ? <div className="history-list">{visibleHistory.map((session) => <button className="history-summary" key={session.id} onClick={() => setSelectedHistorySessionId(session.id)}><strong>{session.title}</strong><span>{new Date(session.updatedAt).toLocaleString()} · 完整 {session.turns.length} 轮{session.carriedTurnCount ? ` · 承接 ${session.carriedTurnCount} 轮` : ""}{session.lastContextTurnCount ? ` · 上次发送 ${session.lastContextTurnCount} 轮` : ""}</span><small>{session.asrName} → {session.llmName}</small></button>)}</div> : <p className="empty">没有匹配的会话记录。</p> : <p className="empty">还没有面试会话记录。</p>}</>}</section>}
+      })() : <><div className="panel-head"><div><h2>面试会话记录</h2><p>每次启动测试都会创建一场面试；不保存音频。</p></div><button className="danger" onClick={() => { clearHistory(); setHistory([]); setSelectedHistorySessionId(undefined); setHistoryQuery(""); }}>清空记录</button></div><div className="history-toolbar"><label className="history-search"><span>搜索会话</span><input value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} placeholder="主题、问题、回答、模型或时间" /></label><span>{visibleHistory.length} / {history.length} 场</span>{historyQuery && <button className="text-button" onClick={() => setHistoryQuery("")}>清除搜索</button>}</div>{history.length ? visibleHistory.length ? <div className="history-list">{visibleHistory.map((session) => <button className="history-summary" key={session.id} onClick={() => setSelectedHistorySessionId(session.id)}><strong>{session.title}</strong><span>{new Date(session.updatedAt).toLocaleString()} · 完整 {session.turns.length} 轮{session.carriedTurnCount ? ` · 承接 ${session.carriedTurnCount} 轮` : ""}{session.lastContextTurnCount ? ` · 上次发送 ${session.lastContextTurnCount} 轮` : ""}</span><small>{session.asrName} → {session.llmName}{session.draft?.active ? " · 未完成草稿" : ""}</small></button>)}</div> : <p className="empty">没有匹配的会话记录。</p> : <p className="empty">还没有面试会话记录。</p>}</>}</section>}
     </section>
   </main>;
 }

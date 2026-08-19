@@ -1,6 +1,6 @@
 import { isTauri, invoke } from "@tauri-apps/api/core";
 import { sanitizeHeaderConfig, sanitizeLlmError } from "./llm";
-import type { AnswerFramework, AppSettings, AsrPreset, AsrProviderConfig, InterviewFocus, InterviewSession, LlmHealth, LlmProfile, LlmUsage, MaterialContext, SessionRecord } from "../types";
+import type { AnswerFramework, AppSettings, AsrPreset, AsrProviderConfig, InterviewContextTurn, InterviewDraft, InterviewFocus, InterviewSession, InterviewTurn, LlmHealth, LlmProfile, LlmUsage, MaterialContext, SessionRecord } from "../types";
 import { createAsrPreset, createDefaultAsrConfig, createDefaultLlmProfile } from "../types";
 
 const SETTINGS_KEY = "interview-lab.settings.v1";
@@ -268,6 +268,46 @@ function isInterviewSession(value: unknown): value is InterviewSession {
   return typeof value === "object" && value !== null && Array.isArray((value as InterviewSession).turns);
 }
 
+function normalizeInterviewDraft(value: unknown): InterviewDraft | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const source = value as Partial<InterviewDraft>;
+  if (source.active !== true) return undefined;
+  const sessionMode = source.sessionMode === "all" || source.sessionMode === "asr" || source.sessionMode === "answer" ? source.sessionMode : "answer";
+  const testMode = source.testMode === "all" || source.testMode === "asr" || source.testMode === "answer" ? source.testMode : sessionMode;
+  const answerStatus = source.answerStatus === "idle" || source.answerStatus === "generating" || source.answerStatus === "complete" || source.answerStatus === "error" ? source.answerStatus : "idle";
+  const turns = Array.isArray(source.turns)
+    ? source.turns.filter((turn): turn is InterviewTurn => Boolean(turn && typeof turn === "object" && typeof turn.question === "string" && typeof turn.answer === "string")).slice(-200).map((turn) => ({ id: typeof turn.id === "string" ? turn.id.slice(0, 120) : undefined, question: turn.question.slice(0, 20000), answer: turn.answer.slice(0, 40000), pinned: Boolean(turn.pinned) }))
+    : [];
+  const contextTurns = Array.isArray(source.contextTurns)
+    ? source.contextTurns.filter((turn): turn is InterviewContextTurn => Boolean(turn && typeof turn === "object" && typeof turn.id === "string" && typeof turn.sessionId === "string" && typeof turn.question === "string" && typeof turn.answer === "string")).slice(-300).map((turn) => ({ id: turn.id.slice(0, 120), sessionId: turn.sessionId.slice(0, 120), question: turn.question.slice(0, 20000), answer: turn.answer.slice(0, 40000), included: turn.included !== false, pinned: Boolean(turn.pinned) }))
+    : [];
+  const sourceStats = source.contextStats && typeof source.contextStats === "object"
+    ? source.contextStats as Partial<InterviewDraft["contextStats"]>
+    : {};
+  const contextStats = {
+    total: Number.isFinite(sourceStats.total) ? Math.max(0, Math.round(Number(sourceStats.total))) : contextTurns.length,
+    sent: Number.isFinite(sourceStats.sent) ? Math.max(0, Math.round(Number(sourceStats.sent))) : contextTurns.filter((turn) => turn.included).length,
+    omitted: Number.isFinite(sourceStats.omitted) ? Math.max(0, Math.round(Number(sourceStats.omitted))) : 0,
+  };
+  return {
+    active: true,
+    sessionMode,
+    testMode,
+    paused: Boolean(source.paused),
+    question: typeof source.question === "string" ? source.question.slice(0, 20000) : "",
+    partial: typeof source.partial === "string" ? source.partial.slice(0, 12000) : "",
+    answer: typeof source.answer === "string" ? source.answer.slice(0, 50000) : "",
+    answerStatus,
+    lastQuestion: typeof source.lastQuestion === "string" ? source.lastQuestion.slice(0, 20000) : "",
+    turns,
+    contextTurns,
+    completeHistoryCount: Number.isFinite(source.completeHistoryCount) ? Math.max(0, Math.round(Number(source.completeHistoryCount))) : contextStats.total,
+    contextStats,
+    frameworkOverride: source.frameworkOverride === "balanced" || source.frameworkOverride === "star" || source.frameworkOverride === "project-review" || source.frameworkOverride === "incident" || source.frameworkOverride === "customer-objection" || source.frameworkOverride === "tradeoff" || source.frameworkOverride === "collaboration" ? source.frameworkOverride : "",
+    savedAt: typeof source.savedAt === "string" && source.savedAt.trim() ? source.savedAt.slice(0, 80) : new Date().toISOString(),
+  };
+}
+
 function normalizeHistory(value: unknown): InterviewSession[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => {
@@ -285,6 +325,7 @@ function normalizeHistory(value: unknown): InterviewSession[] {
         stageSummary: typeof item.stageSummary === "string" ? item.stageSummary : "",
         lastContextTurnCount: Number.isFinite(item.lastContextTurnCount) ? Math.max(0, Number(item.lastContextTurnCount)) : 0,
         lastOmittedTurnCount: Number.isFinite(item.lastOmittedTurnCount) ? Math.max(0, Number(item.lastOmittedTurnCount)) : 0,
+        draft: normalizeInterviewDraft(item.draft),
         turns,
       };
     }
