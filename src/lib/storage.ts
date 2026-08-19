@@ -660,6 +660,17 @@ async function upsertDocument(context: PersistentContext, key: string, payload: 
   );
 }
 
+async function upsertDocumentTransaction(context: PersistentContext, key: string, payload: unknown) {
+  await context.db.execute("BEGIN");
+  try {
+    await upsertDocument(context, key, payload);
+    await context.db.execute("COMMIT");
+  } catch (error) {
+    await context.db.execute("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
+}
+
 async function replaceHistoryRows(context: PersistentContext, history: InterviewSession[]) {
   await context.db.execute("DELETE FROM interview_sessions");
   for (const session of history.slice(0, 50)) {
@@ -711,13 +722,13 @@ async function maybeCreateBackup(context: PersistentContext, reason: string, for
 async function persistSettingsNow(context: PersistentContext, settings: AppSettings, reason: string) {
   await maybeCreateBackup(context, reason);
   await writeSecrets(context, settings);
-  await upsertDocument(context, "settings", redactSettings(settings));
+  await upsertDocumentTransaction(context, "settings", redactSettings(settings));
   context.snapshot.settings = settings;
 }
 
 async function persistMaterialsNow(context: PersistentContext, materials: MaterialContext, reason: string) {
   await maybeCreateBackup(context, reason);
-  await upsertDocument(context, "materials", materials);
+  await upsertDocumentTransaction(context, "materials", materials);
   context.snapshot.materials = materials;
 }
 
