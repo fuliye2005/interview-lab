@@ -1,6 +1,6 @@
 # Interview Lab 项目记忆区
 
-更新时间：2026-08-19 13:35
+更新时间：2026-08-19 13:46
 
 这不是用户数据或密钥文件，只记录产品不变量、实现证据、未验证风险和下一检查点。任何继续工作前先读取本文件，并以当前工作树、测试输出和 release 构建为准。
 
@@ -28,13 +28,14 @@
 - `16672e8`：悬浮窗停止/重新生成、四组独立快捷键、构建追踪和异常退出标记。
 - `0706a15`：Provider 四标签编辑器、原始 JSON 应用、历史会话搜索、ASR Token 过期提示和配置预览 Key 显示开关。
 - `a036025`：同一会话内的暂停/继续控制，暂停期间系统音频排空但不发送给 ASR。
+- `298c537`：版本升级到 `0.2.13`；修复上下文窗口省略中间轮次时提示词轮次编号错位，并增加对抗测试。
 - 当前批次：增加脱敏外部快照、损坏 SQLite 主文件及 WAL/SHM 伴随文件隔离、原子快照写入和外部快照事务恢复；正常退出快照排队在待处理写入之后，并区分 SQLite 损坏、迁移失败与权限/路径错误；迁移失败也可回退到外部快照；模型 Provider 健康状态、启动运行环境诊断、完整快照事务写入和数据 schema v2 迁移已接入。
 
-最近一次已验证结果：59 项 Vitest 通过、前端生产构建通过、`cargo check` 通过；SQLite v2 迁移编译通过；`0.2.8` Tauri release、NSIS 和 MSI 构建均完成；0.2.8 release EXE 已在本机启动，标题为 `Interview Lab · 实时语音测试台`，窗口可见、进程响应正常且文件版本为 `0.2.8`；Windows UI Automation 识别为 `Tauri Window` + `WRY_WEBVIEW`，未出现浏览器地址栏或标签页。版本 `0.2.9`、`0.2.10`、`0.2.11` 的 EXE-only release 构建已完成；`0.2.12` EXE-only release 构建也已完成。
+最近一次已验证结果：60 项 Vitest 通过、前端生产构建通过、`0.2.13` Tauri EXE-only release 构建通过；SQLite v2 迁移编译通过；`0.2.8` Tauri release、NSIS 和 MSI 构建均完成；0.2.8 release EXE 已在本机启动，标题为 `Interview Lab · 实时语音测试台`，窗口可见、进程响应正常且文件版本为 `0.2.8`；Windows UI Automation 识别为 `Tauri Window` + `WRY_WEBVIEW`，未出现浏览器地址栏或标签页。版本 `0.2.9`、`0.2.10`、`0.2.11`、`0.2.12` 的 EXE-only release 构建已完成；`0.2.13` EXE-only release 构建也已完成。
 
 ## 当前工作树
 
-当前分支为 `main`，`0.2.12` 版本升级与悬浮窗 capability 修复已提交为 `529bb6c`；当前可用 EXE 版本为 `0.2.12`。`0.2.12` release EXE 已复制到 `D:\Interview Lab\tauri-app.exe`，文件版本为 `0.2.12`，SHA-256 为 `DC01319B3AE2E3B0598B684A91AF6F721DFB8984C924BAF349A207A0BDEF4B91`。桌面已有的 `Interview Lab 0.2.8 安装包.exe/.msi` 未被覆盖，本轮没有生成安装包。普通 `main` 推送只运行 EXE job；安装包 job 只有手动触发工作流并勾选 `build_installer` 才会运行。4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
+当前分支为 `main`，`0.2.13` 上下文提示词修复已提交为 `298c537`（基于 `0.2.12` 的 `529bb6c`）；当前可用 EXE 版本为 `0.2.13`。`0.2.13` release EXE 已复制到 `D:\Interview Lab\tauri-app.exe`，文件版本为 `0.2.13`，SHA-256 为 `1C452863B8875611D3A86E328F96DA6DAE59F41D24C35A520F9716A7BFCCF2B5`。桌面已有的 `Interview Lab 0.2.8 安装包.exe/.msi` 未被覆盖，本轮没有生成安装包。普通 `main` 推送只运行 EXE job；安装包 job 只有手动触发工作流并勾选 `build_installer` 才会运行。4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
 
 - 安全备份 JSON 导出/导入，导出内容明确排除 API Key，导入保留本机已有凭证。
 - 存储诊断：SQLite/localStorage、数据版本、Stronghold、备份数量和 SQLite quick check。
@@ -59,7 +60,7 @@
 - 历史会话详情和一级列表会标记“未完成草稿”；结束会话会清除草稿标记，已完成轮次仍保留在会话记录中。
 - 上下文选择现在严格遵守配置窗口预算：固定轮次优先但不能突破上限；超长轮次被省略，较新的可容纳轮次优先保留，并显示省略数量。
 
-上一批已通过 47 项 Vitest、前端生产构建、`cargo check`、Tauri `--no-bundle` release 构建和 Windows 安装包构建；安全脱敏批次为 49 项测试；Provider 增强后为 53 项；未完成会话恢复后为 54 项；外部快照恢复后为 56 项；错误分类和退出顺序修正后为 57 项；迁移回退分类后为 58 项 Vitest；上下文预算对抗测试达到 59 项 Vitest，`0.2.12` 版本升级、前端生产构建、`cargo check`、`npm run tauri:build:exe` 和 EXE 复制均完成。普通 EXE 更新不会生成 NSIS/MSI；安装包仅由 `npm run tauri:build:installer` 或手动触发并勾选 `build_installer` 的 GitHub Actions 生成。
+上一批已通过 47 项 Vitest、前端生产构建、`cargo check`、Tauri `--no-bundle` release 构建和 Windows 安装包构建；安全脱敏批次为 49 项测试；Provider 增强后为 53 项；未完成会话恢复后为 54 项；外部快照恢复后为 56 项；错误分类和退出顺序修正后为 57 项；迁移回退分类后为 58 项 Vitest；上下文预算对抗测试达到 59 项 Vitest；本轮修复轮次编号并达到 60 项 Vitest，`0.2.13` 版本升级、前端生产构建、`npm run tauri:build:exe` 和 EXE 复制均完成。普通 EXE 更新不会生成 NSIS/MSI；安装包仅由 `npm run tauri:build:installer` 或手动触发并勾选 `build_installer` 的 GitHub Actions 生成。
 
 ## 下一检查点
 
@@ -69,7 +70,7 @@
 3. 进行一次真实数据库损坏演练，并确认组件级恢复不会覆盖正常配置或 Stronghold 凭证。
 4. 做一次 30 轮以上真实连续对话运行时验收；单元测试已覆盖上下文选择，但不能替代真实模型流式链路。
 5. 主窗口 `760×560` 暂不作为当前验收重点；多显示器、麦克风双通道和本地 ASR 已按用户决定取消，不再列为交付项。
-6. 本次交付点：`0.2.12` 已升级版本并授权 `answer-overlay` 悬浮窗使用窗口能力，生成并复制单文件 EXE；只交付 EXE，安装包按用户要求不自动生成。每次后续发布继续递增版本号，不重复使用旧版本号。
+6. 本次交付点：`0.2.13` 已修复上下文轮次编号错位，生成并复制单文件 EXE；只交付 EXE，安装包按用户要求不自动生成。每次后续发布继续递增版本号，不重复使用旧版本号。
 
 ## 第一性原理审查清单
 
