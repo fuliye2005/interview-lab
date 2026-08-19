@@ -21,8 +21,18 @@ function errorMessage(error: unknown) {
   }
 }
 
+export type DatabaseRecoveryReason = "corruption" | "migration";
+
+export function classifyDatabaseRecoveryError(error: unknown): DatabaseRecoveryReason | undefined {
+  const message = errorMessage(error);
+  if (/database\s+disk\s+image\s+is\s+malformed|file\s+is\s+not\s+a\s+database|not\s+a\s+database|database(?:\s+file)?\s+is\s+corrupt|malformed\s+database|sqlite[_\s-]?corrupt/i.test(message)) return "corruption";
+  if (/permission|access\s+denied|unable\s+to\s+open|path\s+does\s+not\s+exist/i.test(message)) return undefined;
+  if (/migration|migrat(?:e|ion)|sqlx_migrations|failed\s+to\s+apply/i.test(message) && /database|sqlite|sqlx|schema|table|column|constraint|failed\s+to\s+apply|migration/i.test(message)) return "migration";
+  return undefined;
+}
+
 export function isLikelyDatabaseCorruption(error: unknown) {
-  return /database\s+disk\s+image\s+is\s+malformed|file\s+is\s+not\s+a\s+database|not\s+a\s+database|database(?:\s+file)?\s+is\s+corrupt|malformed\s+database|sqlite[_\s-]?corrupt/i.test(errorMessage(error));
+  return classifyDatabaseRecoveryError(error) === "corruption";
 }
 
 type SqlResult = { rowsAffected: number; lastInsertId?: number };
@@ -716,15 +726,15 @@ async function createTauriContext(): Promise<PersistentContext> {
     import("@tauri-apps/plugin-stronghold"),
     import("@tauri-apps/api/path"),
   ]);
-  let databaseRecovered = false;
+  let databaseRecoveryReason: DatabaseRecoveryReason | undefined;
   let db: SqlDatabase;
   try {
     db = await Database.load(DATABASE_PATH) as unknown as SqlDatabase;
   } catch (error) {
-    if (!isLikelyDatabaseCorruption(error)) throw error;
-    const isolated = await invoke<string | null>("isolate_corrupt_database").catch(() => null);
+    databaseRecoveryReason = classifyDatabaseRecoveryError(error);
+    if (!databaseRecoveryReason) throw error;
+    const isolated = await invoke<string | null>("isolate_database_for_recovery").catch(() => null);
     if (!isolated) throw error;
-    databaseRecovered = true;
     db = await Database.load(DATABASE_PATH) as unknown as SqlDatabase;
   }
   const password = await invoke<string>("get_vault_password");
@@ -746,7 +756,7 @@ async function createTauriContext(): Promise<PersistentContext> {
     lastBackupAt: 0,
     startup: { uncleanExit: false },
   };
-  const externalSnapshot = databaseRecovered
+  const externalSnapshot = databaseRecoveryReason
     ? parseExternalSnapshot(await invoke<string | null>("read_latest_external_snapshot").catch(() => null))
     : undefined;
   const runtimeRows = await db.select<Array<{ payload: string }>>("SELECT payload FROM app_documents WHERE document_key = $1", ["runtime"]);
@@ -773,9 +783,9 @@ async function createTauriContext(): Promise<PersistentContext> {
     await writeSecrets(context, hydratedSettings);
     context.snapshot = recoveredSnapshot;
     context.startup.recoveryPerformed = true;
-    context.startup.recoveryMessage = "检测到数据库无法加载，已从最近的脱敏外部快照恢复配置、材料和会话；本机 Stronghold 凭证已保留。";
-  } else if (!hasDatabaseState && databaseRecovered) {
-    context.startup.recoveryMessage = "检测到数据库无法加载，已重建空数据库；没有可用的外部快照，未覆盖其它本机数据。";
+    context.startup.recoveryMessage = `${databaseRecoveryReason === "migration" ? "检测到数据库迁移失败" : "检测到数据库损坏"}，已从最近的脱敏外部快照恢复配置、材料和会话；本机 Stronghold 凭证已保留。`;
+  } else if (!hasDatabaseState && databaseRecoveryReason) {
+    context.startup.recoveryMessage = `${databaseRecoveryReason === "migration" ? "检测到数据库迁移失败" : "检测到数据库损坏"}，已重建空数据库；没有可用的外部快照，未覆盖其它本机数据。`;
   } else if (!hasDatabaseState && hasLegacyData()) {
     const legacy = { settings: loadSettings(), materials: loadMaterials(), history: loadHistory() };
     context.snapshot = legacy;

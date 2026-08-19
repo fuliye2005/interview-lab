@@ -130,6 +130,15 @@ fn read_latest_external_snapshot(app: AppHandle) -> Result<Option<String>, Strin
 
 #[tauri::command]
 fn isolate_corrupt_database(app: AppHandle) -> Result<Option<String>, String> {
+    isolate_database_files(app)
+}
+
+#[tauri::command]
+fn isolate_database_for_recovery(app: AppHandle) -> Result<Option<String>, String> {
+    isolate_database_files(app)
+}
+
+fn isolate_database_files(app: AppHandle) -> Result<Option<String>, String> {
     let data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
     let database = data_dir.join("interview-lab.db");
     let companions = [data_dir.join("interview-lab.db-wal"), data_dir.join("interview-lab.db-shm")];
@@ -251,7 +260,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_stronghold::Builder::new(stronghold_password).build())
-        .invoke_handler(tauri::generate_handler![greet, exit_app, get_vault_password, write_external_snapshot, read_latest_external_snapshot, isolate_corrupt_database, start_system_audio_capture, pause_system_audio_capture, resume_system_audio_capture, stop_system_audio_capture])
+        .invoke_handler(tauri::generate_handler![greet, exit_app, get_vault_password, write_external_snapshot, read_latest_external_snapshot, isolate_corrupt_database, isolate_database_for_recovery, start_system_audio_capture, pause_system_audio_capture, resume_system_audio_capture, stop_system_audio_capture])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

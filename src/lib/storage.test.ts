@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createExternalSnapshot, createSafeDataBundle, defaultSettings, isLikelyDatabaseCorruption, loadHistory, loadSettings, mergeStoredHeaderConfig, parseExternalSnapshot, parseSafeDataBundle, saveSettings, saveSnapshot } from "./storage";
+import { classifyDatabaseRecoveryError, createExternalSnapshot, createSafeDataBundle, defaultSettings, isLikelyDatabaseCorruption, loadHistory, loadSettings, mergeStoredHeaderConfig, parseExternalSnapshot, parseSafeDataBundle, saveSettings, saveSnapshot } from "./storage";
 
 const historyKey = "interview-lab.history.v1";
 const settingsKey = "interview-lab.settings.v1";
@@ -211,11 +211,20 @@ describe("loadSettings", () => {
 });
 
 describe("external recovery snapshots", () => {
+  it("keeps recovery classification safe for nested database error payloads", () => {
+    expect(classifyDatabaseRecoveryError({ cause: "SQLite schema migration failed while adding a column" })).toBe("migration");
+    expect(classifyDatabaseRecoveryError({ cause: "permission denied while opening database" })).toBeUndefined();
+  });
+
   it("only treats explicit SQLite corruption messages as recoverable database damage", () => {
     expect(isLikelyDatabaseCorruption(new Error("database disk image is malformed"))).toBe(true);
     expect(isLikelyDatabaseCorruption({ message: "file is not a database" })).toBe(true);
+    expect(classifyDatabaseRecoveryError(new Error("sqlx migration failed: duplicate column"))).toBe("migration");
+    expect(classifyDatabaseRecoveryError(new Error("failed to apply database schema migration"))).toBe("migration");
     expect(isLikelyDatabaseCorruption(new Error("migration failed: permission denied"))).toBe(false);
+    expect(classifyDatabaseRecoveryError(new Error("migration failed: permission denied"))).toBeUndefined();
     expect(isLikelyDatabaseCorruption(new Error("unable to open database file"))).toBe(false);
+    expect(classifyDatabaseRecoveryError(new Error("unable to open database file"))).toBeUndefined();
   });
 
   it("creates a versioned snapshot without API keys or sensitive headers", () => {
