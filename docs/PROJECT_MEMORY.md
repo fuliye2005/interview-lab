@@ -35,11 +35,11 @@
 - 当前批次：版本升级到 `0.2.17`；系统托盘新增“打开悬浮面试台”，主窗口驻留后台时可直接进入悬浮流程；同步更新 Tauri、npm 和 Cargo 版本元数据。
 - 当前批次：增加脱敏外部快照、损坏 SQLite 主文件及 WAL/SHM 伴随文件隔离、原子快照写入和外部快照事务恢复；正常退出快照排队在待处理写入之后，并区分 SQLite 损坏、迁移失败与权限/路径错误；迁移失败也可回退到外部快照；模型 Provider 健康状态、启动运行环境诊断、完整快照事务写入和数据 schema v2 迁移已接入。
 
-最近一次已验证结果：66 项 Vitest 通过、前端生产构建通过、`cargo check --locked` 通过；`0.2.17` Tauri EXE-only release 构建待本批完成；`0.2.16` EXE-only release 构建通过；SQLite v2 迁移编译通过；`0.2.8` Tauri release、NSIS 和 MSI 构建均完成；0.2.8 release EXE 已在本机启动，标题为 `Interview Lab · 实时语音测试台`，窗口可见、进程响应正常且文件版本为 `0.2.8`；Windows UI Automation 识别为 `Tauri Window` + `WRY_WEBVIEW`，未出现浏览器地址栏或标签页。版本 `0.2.9`、`0.2.10`、`0.2.11`、`0.2.12`、`0.2.13`、`0.2.14`、`0.2.15` 和 `0.2.16` 的 EXE-only release 构建均已完成；本批没有生成安装包。
+最近一次已验证结果：66 项 Vitest 通过、前端生产构建通过、`cargo check --locked` 通过；`0.2.17` Tauri EXE-only release 构建通过；SQLite v2 迁移编译通过；`0.2.8` Tauri release、NSIS 和 MSI 构建均完成；0.2.8 release EXE 已在本机启动，标题为 `Interview Lab · 实时语音测试台`，窗口可见、进程响应正常且文件版本为 `0.2.8`；Windows UI Automation 识别为 `Tauri Window` + `WRY_WEBVIEW`，未出现浏览器地址栏或标签页。版本 `0.2.9`、`0.2.10`、`0.2.11`、`0.2.12`、`0.2.13`、`0.2.14`、`0.2.15`、`0.2.16` 和 `0.2.17` 的 EXE-only release 构建均已完成；本批没有生成安装包。
 
 ## 当前工作树
 
-当前分支为 `main`，`0.2.16` 稳定性修复提交 `dffacf1` 已推送到远端；`0.2.17` 托盘悬浮入口正在构建。当前可用 EXE 已复制到 `D:\Interview Lab\tauri-app.exe`，文件版本为 `0.2.16`，SHA-256 为 `1D1B598222075A28AC539BE3D311D001F0B6746DBB73C946D74E02C7241DFBBB`。桌面已有的 `Interview Lab 0.2.8 安装包.exe/.msi` 未被覆盖，本批没有生成安装包。普通 `main` 推送只运行 EXE job；安装包 job 只有手动触发工作流并勾选 `build_installer` 才会运行。4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
+当前分支为 `main`，`0bbc5d6`（托盘直接打开悬浮面试台）已在本地完成，待推送到远端。`0.2.17` EXE 已复制到 `D:\Interview Lab\tauri-app.exe`，文件版本为 `0.2.17`，SHA-256 为 `4821AC7841F65813C1D9AB92CE7C2D87729561E12C3A146AB22BE17491CC937C`。桌面已有的 `Interview Lab 0.2.8 安装包.exe/.msi` 未被覆盖，本批没有生成安装包。普通 `main` 推送只运行 EXE job；安装包 job 只有手动触发工作流并勾选 `build_installer` 才会运行。4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
 
 - 安全备份 JSON 导出/导入，导出内容明确排除 API Key，导入保留本机已有凭证。
 - 存储诊断：SQLite/localStorage、数据版本、Stronghold、备份数量和 SQLite quick check。
@@ -76,7 +76,7 @@
 3. 进行一次真实数据库损坏演练，并确认组件级恢复不会覆盖正常配置或 Stronghold 凭证。
 4. 做一次 30 轮以上真实连续对话运行时验收；单元测试已覆盖上下文选择，但不能替代真实模型流式链路。
 5. 主窗口 `760×560` 暂不作为当前验收重点；多显示器、麦克风双通道和本地 ASR 已按用户决定取消，不再列为交付项。
-6. 本次工作点：`0.2.17` 增加托盘直接打开悬浮面试台；66 项测试、前端生产构建、`cargo check --locked` 已通过，EXE-only release 构建待完成；安装包按用户要求不自动生成。每次后续发布继续递增版本号，不重复使用旧版本号。
+6. 本次工作点：`0.2.17` 增加托盘直接打开悬浮面试台；66 项测试、前端生产构建、`cargo check --locked` 和 EXE-only release 构建均已通过；安装包按用户要求不自动生成。每次后续发布继续递增版本号，不重复使用旧版本号。
 7. 豆包实时协议按当前范围保持“预配置可保存、可诊断但不保证实时接入”，不再作为待实现功能追踪。
 
 ## 第一性原理审查清单
