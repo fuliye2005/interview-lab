@@ -166,6 +166,8 @@ export interface InterviewSession {
   carriedTurnCount: number;
   turns: SessionRecord[];
   stageSummary?: string;
+  /** True after the user edits the generated stage summary manually. */
+  stageSummaryEdited?: boolean;
   lastContextTurnCount?: number;
   lastOmittedTurnCount?: number;
   draft?: InterviewDraft;

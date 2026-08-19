@@ -317,6 +317,15 @@ function isInterviewSession(value: unknown): value is InterviewSession {
   return typeof value === "object" && value !== null && Array.isArray((value as InterviewSession).turns);
 }
 
+function generatedStageSummary(turns: SessionRecord[]) {
+  const completed = turns.filter((turn) => !turn.error && turn.question.trim() && turn.answer.trim()).slice(-6);
+  return completed.map((turn, index) => {
+    const question = turn.question.replace(/\s+/g, " ").trim().slice(0, 90);
+    const answer = turn.answer.replace(/\s+/g, " ").trim().slice(0, 150);
+    return `${index + 1}. ${question}：${answer}`;
+  }).join("\n");
+}
+
 function normalizeInterviewDraft(value: unknown): InterviewDraft | undefined {
   if (!value || typeof value !== "object") return undefined;
   const source = value as Partial<InterviewDraft>;
@@ -366,12 +375,17 @@ function normalizeHistory(value: unknown): InterviewSession[] {
         contextIncluded: typeof turn.contextIncluded === "boolean" ? turn.contextIncluded : !turn.error && Boolean(turn.answer?.trim()),
         pinned: Boolean(turn.pinned),
       }));
+      const stageSummary = typeof item.stageSummary === "string" ? item.stageSummary : "";
+      const generatedSummary = generatedStageSummary(turns);
       return {
         ...item,
         title: typeof item.title === "string" && item.title.trim() ? item.title : `历史面试 ${new Date(item.createdAt).toLocaleString()}`,
         updatedAt: item.updatedAt || item.createdAt,
         carriedTurnCount: item.carriedTurnCount || 0,
-        stageSummary: typeof item.stageSummary === "string" ? item.stageSummary : "",
+        stageSummary,
+        // Existing summaries may have been written before the explicit marker existed;
+        // recognize the old generated form before treating a summary as manual.
+        stageSummaryEdited: Boolean(item.stageSummaryEdited || (stageSummary.trim() && stageSummary !== generatedSummary)),
         lastContextTurnCount: Number.isFinite(item.lastContextTurnCount) ? Math.max(0, Number(item.lastContextTurnCount)) : 0,
         lastOmittedTurnCount: Number.isFinite(item.lastOmittedTurnCount) ? Math.max(0, Number(item.lastOmittedTurnCount)) : 0,
         draft: normalizeInterviewDraft(item.draft),
@@ -393,6 +407,7 @@ function normalizeHistory(value: unknown): InterviewSession[] {
       llmName: record.llmName,
       carriedTurnCount: 0,
       stageSummary: "",
+      stageSummaryEdited: false,
       lastContextTurnCount: 0,
       lastOmittedTurnCount: 0,
       turns: [normalizedRecord],

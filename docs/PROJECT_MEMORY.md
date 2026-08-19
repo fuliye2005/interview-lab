@@ -1,6 +1,6 @@
 # Interview Lab 项目记忆区
 
-更新时间：2026-08-19 14:31
+更新时间：2026-08-19 14:56
 
 这不是用户数据或密钥文件，只记录产品不变量、实现证据、未验证风险和下一检查点。任何继续工作前先读取本文件，并以当前工作树、测试输出和 release 构建为准。
 
@@ -31,13 +31,14 @@
 - `298c537`：版本升级到 `0.2.13`；修复上下文窗口省略中间轮次时提示词轮次编号错位，并增加对抗测试。
 - `9f1fa1e`：版本升级到 `0.2.14`；统一 SQLite `PRAGMA quick_check` 多种返回形态，空结果显示未知，混合错误不会误报为正常，并增加诊断测试。
 - 当前批次：版本升级到 `0.2.15`；模型 Provider 增加可编辑 `config.toml` 标签，使用稳定 Provider ID，补齐请求路径、用量路径和额外请求头；应用 JSON/TOML 时保留脱敏占位符对应的本机 Stronghold Key / 请求头；TOML 支持 K/M 上下文窗口。ASR 预览同步改为稳定 Provider ID 并补齐额外请求头脱敏提示。
+- 当前批次：版本升级到 `0.2.16`；为会话链增加循环保护，失败回答不再恢复上一轮回答，ASR 启动失败会清理采集句柄，阶段摘要支持手动编辑保护并保留承接基线，空模型回答不会写入上下文。
 - 当前批次：增加脱敏外部快照、损坏 SQLite 主文件及 WAL/SHM 伴随文件隔离、原子快照写入和外部快照事务恢复；正常退出快照排队在待处理写入之后，并区分 SQLite 损坏、迁移失败与权限/路径错误；迁移失败也可回退到外部快照；模型 Provider 健康状态、启动运行环境诊断、完整快照事务写入和数据 schema v2 迁移已接入。
 
-最近一次已验证结果：65 项 Vitest 通过、前端生产构建通过、`cargo check` 通过；`0.2.14` Tauri EXE-only release 构建通过；SQLite v2 迁移编译通过；`0.2.8` Tauri release、NSIS 和 MSI 构建均完成；0.2.8 release EXE 已在本机启动，标题为 `Interview Lab · 实时语音测试台`，窗口可见、进程响应正常且文件版本为 `0.2.8`；Windows UI Automation 识别为 `Tauri Window` + `WRY_WEBVIEW`，未出现浏览器地址栏或标签页。版本 `0.2.9`、`0.2.10`、`0.2.11`、`0.2.12`、`0.2.13` 的 EXE-only release 构建已完成；`0.2.14` EXE-only release 构建也已完成。本批 `0.2.15` 尚未生成 EXE 或安装包。
+最近一次已验证结果：66 项 Vitest 通过、前端生产构建通过、`cargo check` 通过；`0.2.16` Tauri EXE-only release 构建通过；SQLite v2 迁移编译通过；`0.2.8` Tauri release、NSIS 和 MSI 构建均完成；0.2.8 release EXE 已在本机启动，标题为 `Interview Lab · 实时语音测试台`，窗口可见、进程响应正常且文件版本为 `0.2.8`；Windows UI Automation 识别为 `Tauri Window` + `WRY_WEBVIEW`，未出现浏览器地址栏或标签页。版本 `0.2.9`、`0.2.10`、`0.2.11`、`0.2.12`、`0.2.13`、`0.2.14`、`0.2.15` 和 `0.2.16` 的 EXE-only release 构建均已完成；本批没有生成安装包。
 
 ## 当前工作树
 
-当前分支为 `main`，`0.2.15` 配置编辑批次已提交为 `75893a4` 并推送到 `origin/main`。当前可用 EXE 已复制到 `D:\Interview Lab\tauri-app.exe`，文件版本为 `0.2.15`，SHA-256 为 `43DBA99D7CF95345C7CFE55CAA46A167C449D12B69548665A1930F18BEDC0606`。桌面已有的 `Interview Lab 0.2.8 安装包.exe/.msi` 未被覆盖，本批没有生成安装包。普通 `main` 推送只运行 EXE job；安装包 job 只有手动触发工作流并勾选 `build_installer` 才会运行。4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
+当前分支为 `main`，`0.2.16` 稳定性修复批次正在提交。当前可用 EXE 已复制到 `D:\Interview Lab\tauri-app.exe`，文件版本为 `0.2.16`，SHA-256 为 `1D1B598222075A28AC539BE3D311D001F0B6746DBB73C946D74E02C7241DFBBB`。桌面已有的 `Interview Lab 0.2.8 安装包.exe/.msi` 未被覆盖，本批没有生成安装包。普通 `main` 推送只运行 EXE job；安装包 job 只有手动触发工作流并勾选 `build_installer` 才会运行。4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
 
 - 安全备份 JSON 导出/导入，导出内容明确排除 API Key，导入保留本机已有凭证。
 - 存储诊断：SQLite/localStorage、数据版本、Stronghold、备份数量和 SQLite quick check。
@@ -62,7 +63,7 @@
 - 历史会话详情和一级列表会标记“未完成草稿”；结束会话会清除草稿标记，已完成轮次仍保留在会话记录中。
 - 上下文选择现在严格遵守配置窗口预算：固定轮次优先但不能突破上限；超长轮次被省略，较新的可容纳轮次优先保留，并显示省略数量。
 
-上一批已通过 47 项 Vitest、前端生产构建、`cargo check`、Tauri `--no-bundle` release 构建和 Windows 安装包构建；安全脱敏批次为 49 项测试；Provider 增强后为 53 项；未完成会话恢复后为 54 项；外部快照恢复后为 56 项；错误分类和退出顺序修正后为 57 项；迁移回退分类后为 58 项 Vitest；上下文预算对抗测试达到 59 项 Vitest；轮次编号修复后为 60 项；quick_check 兼容性修复达到 62 项；本批 TOML、稳定 Provider ID 和 ASR 预览补齐后为 65 项 Vitest，前端生产构建和 `cargo check` 通过。`0.2.15` 尚未运行 EXE-only 构建。普通 EXE 更新不会生成 NSIS/MSI；安装包仅由 `npm run tauri:build:installer` 或手动触发并勾选 `build_installer` 的 GitHub Actions 生成。
+上一批已通过 47 项 Vitest、前端生产构建、`cargo check`、Tauri `--no-bundle` release 构建和 Windows 安装包构建；安全脱敏批次为 49 项测试；Provider 增强后为 53 项；未完成会话恢复后为 54 项；外部快照恢复后为 56 项；错误分类和退出顺序修正后为 57 项；迁移回退分类后为 58 项 Vitest；上下文预算对抗测试达到 59 项；轮次编号修复后为 60 项；quick_check 兼容性修复达到 62 项；TOML、稳定 Provider ID 和 ASR 预览补齐后为 65 项；本批会话稳定性修复后为 66 项 Vitest，前端生产构建、`cargo check` 和 `0.2.16` EXE-only 构建通过。普通 EXE 更新不会生成 NSIS/MSI；安装包仅由 `npm run tauri:build:installer` 或手动触发并勾选 `build_installer` 的 GitHub Actions 生成。
 
 ## 下一检查点
 
@@ -72,7 +73,7 @@
 3. 进行一次真实数据库损坏演练，并确认组件级恢复不会覆盖正常配置或 Stronghold 凭证。
 4. 做一次 30 轮以上真实连续对话运行时验收；单元测试已覆盖上下文选择，但不能替代真实模型流式链路。
 5. 主窗口 `760×560` 暂不作为当前验收重点；多显示器、麦克风双通道和本地 ASR 已按用户决定取消，不再列为交付项。
-6. 本次工作点：`0.2.15` 已完成 JSON/TOML Provider 编辑和脱敏回写代码，前端构建、65 项测试、`cargo check` 和 EXE-only release 构建通过；新 EXE 已复制到 `D:\Interview Lab\tauri-app.exe` 并推送提交 `75893a4`，安装包按用户要求不自动生成。每次后续发布继续递增版本号，不重复使用旧版本号。
+6. 本次工作点：`0.2.16` 已完成会话链循环保护、失败回答隔离、ASR 失败清理和阶段摘要保护；前端构建、66 项测试、`cargo check` 和 EXE-only release 构建通过；新 EXE 已复制到 `D:\Interview Lab\tauri-app.exe`，待提交推送，安装包按用户要求不自动生成。每次后续发布继续递增版本号，不重复使用旧版本号。
 
 ## 第一性原理审查清单
 

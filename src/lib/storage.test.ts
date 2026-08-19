@@ -52,6 +52,12 @@ describe("loadHistory", () => {
     expect(loadHistory()[0]).toMatchObject({ id: "session-2", title: "解决方案顾问一面" });
   });
 
+  it("preserves the manual stage-summary marker", () => {
+    setStoredHistory([{ id: "session-summary", title: "一面", createdAt: "2026-08-17T08:00:00.000Z", updatedAt: "2026-08-17T08:05:00.000Z", asrName: "ASR", llmName: "LLM", carriedTurnCount: 0, stageSummary: "用户确认的阶段摘要", stageSummaryEdited: true, turns: [] }]);
+
+    expect(loadHistory()[0]).toMatchObject({ stageSummary: "用户确认的阶段摘要", stageSummaryEdited: true });
+  });
+
   it("normalizes context inclusion and pinning flags for old and new turns", () => {
     setStoredHistory([{ id: "session-3", title: "二面", createdAt: "2026-08-17T08:00:00.000Z", updatedAt: "2026-08-17T08:05:00.000Z", asrName: "ASR", llmName: "LLM", carriedTurnCount: 0, turns: [
       { id: "turn-1", createdAt: "2026-08-17T08:01:00.000Z", question: "固定问题", answer: "固定回答", asrName: "ASR", llmName: "LLM", pinned: true },

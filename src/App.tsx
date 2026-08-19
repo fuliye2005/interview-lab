@@ -799,8 +799,10 @@ function App() {
   function interviewContextForSession(sessionId: string, sessions = history): InterviewContextTurn[] {
     const byId = new Map(sessions.map((session) => [session.id, session]));
     const chain: InterviewSession[] = [];
+    const visited = new Set<string>();
     let current = byId.get(sessionId);
-    while (current) {
+    while (current && !visited.has(current.id) && chain.length < 100) {
+      visited.add(current.id);
       chain.unshift(current);
       current = current.sourceSessionId ? byId.get(current.sourceSessionId) : undefined;
     }
@@ -893,7 +895,8 @@ function App() {
     const now = new Date().toISOString();
     const carriedContext = loadedContextRef.current.filter((turn) => turn.included);
     const carriedTurns = promptTurnsForContext(carriedContext);
-    const sourceTitle = loadedSourceSessionIdRef.current ? history.find((session) => session.id === loadedSourceSessionIdRef.current)?.title || "" : "";
+    const sourceSession = loadedSourceSessionIdRef.current ? history.find((session) => session.id === loadedSourceSessionIdRef.current) : undefined;
+    const sourceTitle = sourceSession?.title || "";
     const title = settings.sessionTitleDraft.trim() || `面试 ${new Date(now).toLocaleString()}`;
     const session: InterviewSession = {
       id: crypto.randomUUID(),
@@ -905,7 +908,9 @@ function App() {
       sourceSessionId: loadedSourceSessionIdRef.current,
       carriedTurnCount: carriedTurns.length,
       turns: [],
-      stageSummary: loadedSourceSessionIdRef.current ? history.find((session) => session.id === loadedSourceSessionIdRef.current)?.stageSummary || "" : "",
+      stageSummary: sourceSession?.stageSummary || "",
+      // Carry a manually edited source summary forward as a protected baseline.
+      stageSummaryEdited: Boolean(sourceSession?.stageSummaryEdited),
       lastContextTurnCount: carriedTurns.length,
       lastOmittedTurnCount: 0,
     };
@@ -959,7 +964,8 @@ function App() {
             ...draftRef.current,
             question: "",
             partial: "",
-            answer: record.answer || draftRef.current.answer,
+            // A failed turn must not resurrect the previous answer after restart.
+            answer: record.error ? "" : record.answer || draftRef.current.answer,
             answerStatus: record.error ? "error" as const : "complete" as const,
             turns: interviewTurnsRef.current.slice(),
             savedAt: record.createdAt,
@@ -971,7 +977,8 @@ function App() {
         updatedAt: record.createdAt,
         turns,
         draft: nextDraft,
-        stageSummary: session.stageSummary?.trim() ? session.stageSummary : makeStageSummary(turns),
+        stageSummary: session.stageSummaryEdited ? session.stageSummary : makeStageSummary(turns),
+        stageSummaryEdited: Boolean(session.stageSummaryEdited),
       };
     }));
   }
@@ -997,7 +1004,7 @@ function App() {
     setHistory((items) => items.map((session) => session.id === sessionId ? { ...session, title, updatedAt: new Date().toISOString() } : session));
   }
   function updateSessionSummary(sessionId: string, stageSummary: string) {
-    setHistory((items) => items.map((session) => session.id === sessionId ? { ...session, stageSummary, updatedAt: new Date().toISOString() } : session));
+    setHistory((items) => items.map((session) => session.id === sessionId ? { ...session, stageSummary, stageSummaryEdited: true, updatedAt: new Date().toISOString() } : session));
   }
   function updateHistoryTurn(sessionId: string, turnId: string, patch: Partial<SessionRecord>) {
     setHistory((items) => items.map((session) => session.id === sessionId
@@ -1030,7 +1037,7 @@ function App() {
   }
   function generateSessionSummary(session: InterviewSession) {
     const summary = makeStageSummary(session.turns);
-    setHistory((items) => items.map((item) => item.id === session.id ? { ...item, stageSummary: summary, updatedAt: new Date().toISOString() } : item));
+    setHistory((items) => items.map((item) => item.id === session.id ? { ...item, stageSummary: summary, stageSummaryEdited: false, updatedAt: new Date().toISOString() } : item));
   }
 
   async function startAsrSession(mode: Exclude<TestMode, "answer">, resumeExisting = false) {
@@ -1073,6 +1080,9 @@ function App() {
       setNotice(resumeExisting ? "ASR 已重新连接，当前面试上下文保持不变。" : mode === "asr" ? "正在捕获系统音频并进行语音转文字。原始音频不会保存。" : materials.confirmed ? "正在捕获默认系统输出并发送给 ASR。原始音频不会保存。" : "正在捕获系统音频；未确认候选人材料，将使用通用回答上下文。");
     } catch (error) {
       asr.close();
+      if (asrRef.current === asr) asrRef.current = undefined;
+      pendingRef.current = false;
+      if (desktopRuntime && !resumeExisting) await invoke("stop_system_audio_capture").catch(() => undefined);
       setAsrStatus("error");
       setNotice(error instanceof Error ? error.message : "启动会话失败");
     }
@@ -1223,6 +1233,7 @@ function App() {
         setAnswer(cleanAnswer);
       }, abortController.signal);
       const cleanAnswer = sanitizeAnswerText(full);
+      if (!cleanAnswer.trim()) throw new Error("模型未返回可用回答");
       setAnswerStatus("complete");
       interviewTurnsRef.current = [...previousTurns, { question: finalQuestion, answer: cleanAnswer }];
       completeHistoryCountRef.current += 1;
