@@ -1,6 +1,6 @@
 # Interview Lab 项目记忆区
 
-更新时间：2026-08-19 13:22
+更新时间：2026-08-19 13:24
 
 这不是用户数据或密钥文件，只记录产品不变量、实现证据、未验证风险和下一检查点。任何继续工作前先读取本文件，并以当前工作树、测试输出和 release 构建为准。
 
@@ -34,7 +34,7 @@
 
 ## 当前工作树
 
-当前分支为 `main`，`0.2.10` 发布流程修正待本轮提交；当前可用 EXE 版本为 `0.2.10`。`0.2.10` release EXE 已复制到 `D:\Interview Lab\tauri-app.exe`，文件版本为 `0.2.10`，SHA-256 为 `B5C2F418A248F5DBB17EC7C7ED84A06A36519EE45A7BA85706FDB79B8AD80BE3`。桌面已有的 `Interview Lab 0.2.8 安装包.exe/.msi` 未被覆盖，本轮没有生成安装包。普通 `main` 推送只运行 EXE job；安装包 job 只有手动触发工作流并勾选 `build_installer` 才会运行。4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
+当前分支为 `main`，`0.2.10` 发布流程修正已提交为 `c4857ad` 并推送到 `origin/main`；当前可用 EXE 版本为 `0.2.10`。`0.2.10` release EXE 已复制到 `D:\Interview Lab\tauri-app.exe`，文件版本为 `0.2.10`，SHA-256 为 `B5C2F418A248F5DBB17EC7C7ED84A06A36519EE45A7BA85706FDB79B8AD80BE3`。桌面已有的 `Interview Lab 0.2.8 安装包.exe/.msi` 未被覆盖，本轮没有生成安装包。普通 `main` 推送只运行 EXE job；安装包 job 只有手动触发工作流并勾选 `build_installer` 才会运行。4 张 `artifacts-window-*.png` 仅为本地诊断截图，不纳入版本库：
 
 - 安全备份 JSON 导出/导入，导出内容明确排除 API Key，导入保留本机已有凭证。
 - 存储诊断：SQLite/localStorage、数据版本、Stronghold、备份数量和 SQLite quick check。
