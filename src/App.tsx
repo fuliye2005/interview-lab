@@ -382,6 +382,7 @@ function App() {
   const autoSubmitTimerRef = useRef<number | undefined>(undefined);
   const autoCandidateRef = useRef("");
   const autoLastSubmittedRef = useRef("");
+  const autoPendingFingerprintRef = useRef("");
   const autoClassificationAbortRef = useRef<AbortController | null>(null);
   const sessionPausedRef = useRef(false);
   const sessionActiveRef = useRef(false);
@@ -920,6 +921,7 @@ function App() {
     if (autoSubmitTimerRef.current) window.clearTimeout(autoSubmitTimerRef.current);
     autoSubmitTimerRef.current = undefined;
     autoCandidateRef.current = "";
+    autoPendingFingerprintRef.current = "";
     autoClassificationAbortRef.current?.abort();
     autoClassificationAbortRef.current = null;
     pendingRef.current = false;
@@ -934,19 +936,26 @@ function App() {
     if (!normalized) return;
     const assessment = assessQuestion(normalized);
     if (!assessment.isQuestion || assessment.confidence < 0.5) {
+      autoPendingFingerprintRef.current = "";
       setAutoStatus(assessment.isQuestion ? "waiting" : "idle");
       if (assessment.isQuestion) setNotice(`已识别到疑似问题，等待补充（置信度 ${Math.round(assessment.confidence * 100)}%）。`);
       return;
     }
     if (normalizeQuestionFingerprint(normalized) === normalizeQuestionFingerprint(autoLastSubmittedRef.current)) return;
+    const fingerprint = normalizeQuestionFingerprint(normalized);
+    if (fingerprint === autoPendingFingerprintRef.current) return;
     if (autoSubmitTimerRef.current) window.clearTimeout(autoSubmitTimerRef.current);
+    autoPendingFingerprintRef.current = fingerprint;
     autoCandidateRef.current = normalized;
     setAutoStatus("confirmed");
     setNotice(`问题已确认，${Math.round(settings.autoInterview.submitDelayMs / 100) / 10} 秒后自动生成，可点击取消。`);
     autoSubmitTimerRef.current = window.setTimeout(() => {
       autoSubmitTimerRef.current = undefined;
       const current = autoCandidateRef.current;
-      if (!current || !activeSessionIdRef.current || !sessionActiveRef.current || sessionPausedRef.current || generationAbortRef.current) return;
+      if (!current || !activeSessionIdRef.current || !sessionActiveRef.current || sessionPausedRef.current || generationAbortRef.current) {
+        autoPendingFingerprintRef.current = "";
+        return;
+      }
       const controller = new AbortController();
       autoClassificationAbortRef.current = controller;
       setAutoStatus("waiting");
@@ -966,12 +975,14 @@ function App() {
         }
         if (!activeSessionIdRef.current || !sessionActiveRef.current || sessionPausedRef.current || generationAbortRef.current) return;
         if (!confirmed.isQuestion || !confirmed.isComplete || confirmed.needsFollowup || confirmed.confidence < settings.autoInterview.confidenceThreshold) {
+          autoPendingFingerprintRef.current = "";
           setAutoStatus(confirmed.isQuestion ? "waiting" : "idle");
           setNotice(confirmed.needsFollowup ? "问题还在补充中，系统会继续合并下一段转写。" : "当前内容暂未确认成完整问题，可继续说完或手动提交。");
           return;
         }
         autoLastSubmittedRef.current = current;
         autoCandidateRef.current = "";
+        autoPendingFingerprintRef.current = "";
         setAutoStatus("generating");
         void generateAnswer(current);
       })();
@@ -1227,6 +1238,7 @@ function App() {
     autoSubmitTimerRef.current = undefined;
     autoCandidateRef.current = "";
     autoLastSubmittedRef.current = "";
+    autoPendingFingerprintRef.current = "";
     autoClassificationAbortRef.current?.abort();
     autoClassificationAbortRef.current = null;
     generationAbortRef.current?.abort();
