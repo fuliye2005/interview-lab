@@ -107,6 +107,6 @@
 - 新增 `src/lib/auto-question.ts`：本地低延迟问题初筛、问题指纹去重、句段转写合并；新增 `src/lib/llm.ts` 结构化问题判断调用，先由模型确认 `is_question / is_complete / needs_followup / confidence`，再进入答案生成。
 - ASR 回调新增句段级 `onSegment`，阿里云 NLS `SentenceEnd` 可以在不手动结束录音的情况下驱动自动判断；完整结果与句段结果会去重合并。
 - 自动回答支持等待窗口、模型二级确认、取消、暂停、重复问题抑制、ASR/模型失败状态回收；悬浮窗显示自动模式和当前自动状态。
-- 当前验证：72 项 Vitest、前端生产构建、`cargo check --locked` 和 `0.3.1` EXE-only release 构建通过；EXE 文件版本为 `0.3.1`，已复制到 `D:\Interview Lab\tauri-app-0.3.1.exe`，SHA-256 为 `A68C9914BC3E04A6AD31F49A958558B339E2E4A7B88ACB99F83F1EB897C9E14E`。本机启动验收窗口标题为 `Interview Lab · 实时语音测试台`，进程响应正常。
+- 当前验证：72 项 Vitest、前端生产构建、`cargo check --locked` 和 `0.3.1` EXE-only release 构建通过；EXE 文件版本为 `0.3.1`，已复制到 `D:\Interview Lab\tauri-app-0.3.1.exe`，当前 SHA-256 为 `7252A09BE7E5C789D9284E399754447E489F2C4EB08A4A10948F73A9BE6AF826`。上一轮本机启动验收窗口标题为 `Interview Lab · 实时语音测试台`，进程响应正常。
 - 用户已明确：当前语音转文字模型 API 不可用，本轮不做真实 ASR 连接、语音链路运行验收或外部服务模拟；只继续完成代码、状态机、持久化和桌面交付实现。
 - 当前下一步：收口自动状态机并记录代码检查结果；真实 ASR/模型长时间运行验收待服务可用后再做，安装包仍只在用户明确要求时生成。
