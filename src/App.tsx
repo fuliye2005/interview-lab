@@ -383,6 +383,7 @@ function App() {
   const autoCandidateRef = useRef("");
   const autoLastSubmittedRef = useRef("");
   const autoPendingFingerprintRef = useRef("");
+  const deferredQuestionRef = useRef("");
   const autoClassificationAbortRef = useRef<AbortController | null>(null);
   const sessionPausedRef = useRef(false);
   const sessionActiveRef = useRef(false);
@@ -922,6 +923,7 @@ function App() {
     autoSubmitTimerRef.current = undefined;
     autoCandidateRef.current = "";
     autoPendingFingerprintRef.current = "";
+    deferredQuestionRef.current = "";
     autoClassificationAbortRef.current?.abort();
     autoClassificationAbortRef.current = null;
     pendingRef.current = false;
@@ -934,6 +936,14 @@ function App() {
     if (!activeSessionIdRef.current || mode !== "all" || !settings.autoInterview.autoGenerate || settings.autoInterview.mode === "off") return;
     const normalized = candidate.trim();
     if (!normalized) return;
+    if (generationAbortRef.current) {
+      deferredQuestionRef.current = settings.autoInterview.mergeFollowups
+        ? mergeTranscript(deferredQuestionRef.current, normalized)
+        : normalized;
+      setAutoStatus("waiting");
+      setNotice("回答生成中，已暂存面试官的后续内容，生成完成后继续判断。");
+      return;
+    }
     const assessment = assessQuestion(normalized);
     if (!assessment.isQuestion || assessment.confidence < 0.5) {
       autoPendingFingerprintRef.current = "";
@@ -1239,6 +1249,7 @@ function App() {
     autoCandidateRef.current = "";
     autoLastSubmittedRef.current = "";
     autoPendingFingerprintRef.current = "";
+    deferredQuestionRef.current = "";
     autoClassificationAbortRef.current?.abort();
     autoClassificationAbortRef.current = null;
     generationAbortRef.current?.abort();
@@ -1342,6 +1353,7 @@ function App() {
     if (autoSubmitTimerRef.current) window.clearTimeout(autoSubmitTimerRef.current);
     autoSubmitTimerRef.current = undefined;
     autoCandidateRef.current = "";
+    autoPendingFingerprintRef.current = "";
     setAutoStatus("generating");
     lastQuestionRef.current = finalQuestion;
     const abortController = new AbortController();
@@ -1358,6 +1370,7 @@ function App() {
     pendingRef.current = false; questionRef.current = ""; setQuestion(""); setPartial(""); setAnswer(""); setAnswerStatus("generating"); setAsrStatus("listening");
     await showOverlay("", false, false);
     let full = "";
+    let completed = false;
     try {
       const activeStageSummary = history.find((session) => session.id === activeSessionIdRef.current)?.stageSummary || "";
       await streamLlm(activeProfile, buildInterviewPrompt(finalQuestion, materials, previousTurns, activeProfile.answerDetail, settings.interviewFocus, activeProfile.contextWindow, activeStageSummary, effectiveAnswerFramework), (delta) => {
@@ -1367,6 +1380,7 @@ function App() {
       }, abortController.signal);
       const cleanAnswer = sanitizeAnswerText(full);
       if (!cleanAnswer.trim()) throw new Error("模型未返回可用回答");
+      completed = true;
       setAnswerStatus("complete");
       setAutoStatus("idle");
       interviewTurnsRef.current = [...previousTurns, { question: finalQuestion, answer: cleanAnswer }];
@@ -1386,6 +1400,11 @@ function App() {
       appendSessionRecord({ id: crypto.randomUUID(), createdAt: new Date().toISOString(), question: finalQuestion, answer: "", asrName: settings.asr.name, llmName: activeProfile.name, error: message });
     } finally {
       if (generationAbortRef.current === abortController) generationAbortRef.current = null;
+      const deferred = deferredQuestionRef.current;
+      deferredQuestionRef.current = "";
+      if (completed && deferred && activeSessionIdRef.current && sessionActiveRef.current && !sessionPausedRef.current && settings.autoInterview.mode !== "off") {
+        window.setTimeout(() => scheduleAutomaticAnswer(deferred, "all"), 0);
+      }
     }
   }
   async function copyAnswer() {
