@@ -141,6 +141,14 @@ export const defaultSettings = (): AppSettings => ({
   answerFramework: "balanced",
   sessionTitleDraft: "",
   wheelScroll: { transcript: false, answer: false },
+  autoInterview: {
+    mode: "assist",
+    submitDelayMs: 1600,
+    confidenceThreshold: 0.72,
+    mergeFollowups: true,
+    autoGenerate: true,
+    showOverlayStatus: true,
+  },
   overlay: {
     alwaysOnTop: true,
     opacity: 0.96,
@@ -238,6 +246,7 @@ function normalizeSettings(stored?: Partial<AppSettings> | null): AppSettings {
   const fallback = defaultSettings();
   const source = stored ?? {};
   const storedWheelScroll = source.wheelScroll && typeof source.wheelScroll === "object" ? source.wheelScroll : {};
+  const storedAutoInterview = (source.autoInterview && typeof source.autoInterview === "object" ? source.autoInterview : {}) as Partial<AppSettings["autoInterview"]>;
   const storedOverlay = source.overlay && typeof source.overlay === "object" ? source.overlay : {};
   const llmProfiles = Array.isArray(source.llmProfiles) && source.llmProfiles.length
     ? source.llmProfiles.map((profile) => normalizeLlmProfile(profile))
@@ -270,6 +279,16 @@ function normalizeSettings(stored?: Partial<AppSettings> | null): AppSettings {
     answerFramework: isAnswerFramework(source.answerFramework) ? source.answerFramework : fallback.answerFramework,
     sessionTitleDraft: typeof source.sessionTitleDraft === "string" ? source.sessionTitleDraft : fallback.sessionTitleDraft,
     wheelScroll: { ...fallback.wheelScroll, ...storedWheelScroll },
+    autoInterview: {
+      ...fallback.autoInterview,
+      ...storedAutoInterview,
+      mode: storedAutoInterview.mode === "off" || storedAutoInterview.mode === "assist" || storedAutoInterview.mode === "auto" ? storedAutoInterview.mode : fallback.autoInterview.mode,
+      submitDelayMs: Number.isFinite(storedAutoInterview.submitDelayMs) ? Math.min(5000, Math.max(500, Math.round(Number(storedAutoInterview.submitDelayMs)))) : fallback.autoInterview.submitDelayMs,
+      confidenceThreshold: Number.isFinite(storedAutoInterview.confidenceThreshold) ? Math.min(0.99, Math.max(0.5, Number(storedAutoInterview.confidenceThreshold))) : fallback.autoInterview.confidenceThreshold,
+      mergeFollowups: typeof storedAutoInterview.mergeFollowups === "boolean" ? storedAutoInterview.mergeFollowups : fallback.autoInterview.mergeFollowups,
+      autoGenerate: typeof storedAutoInterview.autoGenerate === "boolean" ? storedAutoInterview.autoGenerate : fallback.autoInterview.autoGenerate,
+      showOverlayStatus: typeof storedAutoInterview.showOverlayStatus === "boolean" ? storedAutoInterview.showOverlayStatus : fallback.autoInterview.showOverlayStatus,
+    },
     overlay: normalizeOverlaySettings(storedOverlay, fallback.overlay),
   };
   if (!settings.llmProfiles.some((profile) => profile.id === settings.activeLlmProfileId)) {

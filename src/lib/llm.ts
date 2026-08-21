@@ -22,6 +22,33 @@ export function sanitizeLlmError(error: unknown, credential = "") {
   return sanitizeSecretText(message, credential);
 }
 
+export interface InterviewQuestionClassification {
+  isQuestion: boolean;
+  isComplete: boolean;
+  needsFollowup: boolean;
+  confidence: number;
+  reason?: string;
+}
+
+export function parseInterviewQuestionClassification(raw: string): InterviewQuestionClassification | undefined {
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) return undefined;
+  try {
+    const value = JSON.parse(match[0]) as Record<string, unknown>;
+    if (typeof value.is_question !== "boolean" || typeof value.is_complete !== "boolean") return undefined;
+    const confidence = Number(value.confidence);
+    return {
+      isQuestion: value.is_question,
+      isComplete: value.is_complete,
+      needsFollowup: Boolean(value.needs_followup),
+      confidence: Number.isFinite(confidence) ? Math.min(1, Math.max(0, confidence)) : 0,
+      reason: typeof value.reason === "string" ? value.reason.slice(0, 200) : undefined,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export function sanitizeHeaderConfig(raw: string | undefined, reveal = false) {
   if (!raw?.trim()) return "";
   try {
@@ -185,6 +212,12 @@ export async function streamLlm(profile: LlmProfile, prompt: string, onDelta: (t
   });
   if (!response.ok) throw new Error(`文本模型请求失败：${response.status} ${await response.text()}`);
   await consumeSse(response, onDelta, signal);
+}
+
+export async function classifyInterviewQuestion(profile: LlmProfile, question: string, signal?: AbortSignal) {
+  let raw = "";
+  await streamLlm(profile, `你是面试语音分段判断器。只输出一个合法 JSON 对象，不要 Markdown，不要解释。\n字段必须是：is_question(boolean)、is_complete(boolean)、needs_followup(boolean)、confidence(0 到 1 的数字)、reason(不超过 80 字)。\n判断规则：普通陈述、寒暄和口头填充不是问题；连续补充条件应标记 needs_followup；只有已经形成可回答的问题才标记 is_complete。\n待判断文本：\n${question.trim().slice(0, 8000)}`, (delta) => { raw += delta; }, signal);
+  return parseInterviewQuestionClassification(raw);
 }
 
 export async function listLlmModels(profile: LlmProfile) {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildInterviewPrompt, fetchLlmUsage, listLlmModels, sanitizeAnswerText, sanitizeLlmError, selectInterviewContext, streamLlm, summarizeLlmUsage, testLlmConnection } from "./llm";
+import { buildInterviewPrompt, fetchLlmUsage, listLlmModels, parseInterviewQuestionClassification, sanitizeAnswerText, sanitizeLlmError, selectInterviewContext, streamLlm, summarizeLlmUsage, testLlmConnection } from "./llm";
 import type { LlmProfile, MaterialContext } from "../types";
 
 const materials: MaterialContext = {
@@ -157,6 +157,13 @@ describe("buildInterviewPrompt", () => {
     expect(prompt).toContain("第 1 轮\n面试官：固定事实");
     expect(prompt).toContain("第 3 轮\n面试官：最近问题");
     expect(prompt).not.toContain("第 2 轮\n面试官：最近问题");
+  });
+});
+
+describe("automatic question classification", () => {
+  it("parses the structured classifier response", () => {
+    expect(parseInterviewQuestionClassification('{"is_question":true,"is_complete":true,"needs_followup":false,"confidence":0.91,"reason":"问题完整"}')).toMatchObject({ isQuestion: true, isComplete: true, confidence: 0.91 });
+    expect(parseInterviewQuestionClassification("不是 JSON")).toBeUndefined();
   });
 });
 

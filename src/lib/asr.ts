@@ -4,6 +4,7 @@ export interface AsrCallbacks {
   onStatus: (status: "connecting" | "listening" | "error") => void;
   onPartial: (text: string) => void;
   onFinal: (text: string) => void;
+  onSegment?: (text: string) => void;
   onError: (message: string) => void;
   onDebug?: (message: string) => void;
 }
@@ -267,6 +268,7 @@ export class GenericAsrSession {
       if (type === "SentenceEnd") {
         const index = Number(valueAtPath(event, "payload.index") ?? this.sentenceResults.size + 1);
         this.sentenceResults.set(index, transcript);
+        if (transcript.trim()) this.callbacks.onSegment?.(transcript);
         return;
       }
       if (type === this.config.finalEvent) {

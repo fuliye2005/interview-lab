@@ -193,6 +193,17 @@ export interface OverlaySettings {
 
 export type AsrStatus = "idle" | "connecting" | "listening" | "finalizing" | "error";
 export type AnswerStatus = "idle" | "generating" | "complete" | "error";
+export type AutoInterviewMode = "off" | "assist" | "auto";
+export type AutoInterviewStatus = "idle" | "waiting" | "confirmed" | "generating" | "paused" | "error";
+
+export interface AutoInterviewSettings {
+  mode: AutoInterviewMode;
+  submitDelayMs: number;
+  confidenceThreshold: number;
+  mergeFollowups: boolean;
+  autoGenerate: boolean;
+  showOverlayStatus: boolean;
+}
 
 export interface AppSettings {
   asr: AsrProviderConfig;
@@ -210,6 +221,7 @@ export interface AppSettings {
   sessionTitleDraft: string;
   wheelScroll: WheelScrollSettings;
   overlay: OverlaySettings;
+  autoInterview: AutoInterviewSettings;
 }
 
 const commonAsrConfig = (): Omit<AsrProviderConfig, "name" | "preset" | "protocol" | "wsUrl" | "apiKey" | "audioMode"> => ({

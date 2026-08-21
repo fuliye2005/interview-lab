@@ -96,6 +96,21 @@ describe("loadHistory", () => {
 });
 
 describe("loadSettings", () => {
+  it("persists and normalizes automatic interview settings", async () => {
+    const values = setStoredSettings(null);
+    const settings = defaultSettings();
+    settings.autoInterview.mode = "auto";
+    settings.autoInterview.submitDelayMs = 2400;
+    settings.autoInterview.confidenceThreshold = 0.84;
+    await saveSettings(settings);
+
+    const persisted = JSON.parse(values.get(settingsKey) || "{}") as typeof settings;
+    expect(persisted.autoInterview).toMatchObject({ mode: "auto", submitDelayMs: 2400, confidenceThreshold: 0.84 });
+
+    setStoredSettings({ autoInterview: { mode: "invented", submitDelayMs: 99, confidenceThreshold: 2 } });
+    expect(loadSettings().autoInterview).toMatchObject({ mode: "assist", submitDelayMs: 500, confidenceThreshold: 0.99 });
+  });
+
   it("keeps wheel scrolling disabled by default and merges partial legacy settings", () => {
     setStoredSettings({ wheelScroll: { answer: true }, shortcutEnabled: false });
 

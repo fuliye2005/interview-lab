@@ -8,7 +8,8 @@ import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { GenericAsrSession } from "./lib/asr";
 import { ASR_PROVIDER_PRESETS, asrConfigPreview, asrConfigReady, asrMissingFields, asrProviderLabel, classifyAsrError, testAsrConnection, testAsrFinalText } from "./lib/asr-providers";
 import { BUILD_INFO } from "./lib/build-info";
-import { buildInterviewPrompt, fetchLlmUsage, listLlmModels, sanitizeAnswerText, sanitizeHeaderConfig, sanitizeLlmError, selectInterviewContext, streamLlm, testLlmConnection } from "./lib/llm";
+import { assessQuestion, mergeTranscript, normalizeQuestionFingerprint } from "./lib/auto-question";
+import { buildInterviewPrompt, classifyInterviewQuestion, fetchLlmUsage, listLlmModels, sanitizeAnswerText, sanitizeHeaderConfig, sanitizeLlmError, selectInterviewContext, streamLlm, testLlmConnection } from "./lib/llm";
 import { extractMaterialText, makeCandidateDraft, makeJobDraft } from "./lib/materials";
 import { applyLlmProviderPreset, LLM_PROVIDER_PRESETS, providerLabel, providerRequiresKey } from "./lib/providers";
 import { importRepository as importRepositoryMaterial } from "./lib/repository";
@@ -17,7 +18,7 @@ import { formatShortcut, shortcutKeyToken, toGlobalShortcut } from "./lib/shortc
 import { clearHistory, createSafeDataBundle, defaultSettings, emptyMaterials, getStorageDiagnostics, initializeStorage, loadHistory, loadMaterials, loadSettings, markCleanShutdown, mergeStoredHeaderConfig, parseSafeDataBundle, restoreLatestBackup, saveHistory, saveMaterials, saveSettings, saveSnapshot } from "./lib/storage";
 import { parseSimpleToml, serializeSimpleToml, type SimpleTomlValue } from "./lib/toml";
 import type { StorageDiagnostics } from "./lib/storage";
-import type { AnswerFramework, AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, InterviewContextTurn, InterviewDraft, InterviewFocus, InterviewSession, InterviewTurn, LlmHealth, LlmProfile, LlmProviderPresetId, MaterialContext, OverlayLayout, OverlaySettings, SessionRecord, WheelScrollSettings } from "./types";
+import type { AnswerFramework, AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, AutoInterviewMode, AutoInterviewStatus, InterviewContextTurn, InterviewDraft, InterviewFocus, InterviewSession, InterviewTurn, LlmHealth, LlmProfile, LlmProviderPresetId, MaterialContext, OverlayLayout, OverlaySettings, SessionRecord, WheelScrollSettings } from "./types";
 import { ANSWER_FRAMEWORK_LABELS, createAsrPreset, createDefaultLlmProfile, INTERVIEW_FOCUS_LABELS } from "./types";
 import "./App.css";
 import "./theme.css";
@@ -41,7 +42,7 @@ function formatHealthEntry(health: LlmHealth) {
   if (health.status === "error") return `${new Date(health.testedAt).toLocaleString()} · 失败${health.message ? ` · ${health.message}` : ""}`;
   return `${new Date(health.testedAt).toLocaleString()} · ${health.latencyMs ?? "—"} ms · 首 Token ${health.firstTokenMs ?? "—"} ms`;
 }
-type OverlayCommand = { command: "start" | "submit" | "stop" | "pause" | "stop-generation" | "regenerate" | "hide"; testMode?: TestMode };
+type OverlayCommand = { command: "start" | "submit" | "cancel-auto" | "stop" | "pause" | "stop-generation" | "regenerate" | "hide"; testMode?: TestMode };
 type OverlayState = {
   answer: string;
   question: string;
@@ -68,6 +69,8 @@ type OverlayState = {
   completeContextTurnCount: number;
   sentContextTurnCount: number;
   omittedContextTurnCount: number;
+  autoMode: AutoInterviewMode;
+  autoStatus: AutoInterviewStatus;
 };
 
 const DEFAULT_OVERLAY_STATE: OverlayState = {
@@ -104,6 +107,8 @@ const DEFAULT_OVERLAY_STATE: OverlayState = {
   completeContextTurnCount: 0,
   sentContextTurnCount: 0,
   omittedContextTurnCount: 0,
+  autoMode: "assist",
+  autoStatus: "idle",
 };
 
 function splitAnswerText(raw: string) {
@@ -281,6 +286,7 @@ function Overlay() {
   const compact = layout === "compact";
   const modeLabel = testMode === "asr" ? "语音转文字" : testMode === "answer" ? "问题回答" : "全部启动";
   const answerLabel = state.answerStatus === "generating" ? "正在生成" : state.answerStatus === "complete" ? "回答完成" : state.answerStatus === "error" ? "生成失败" : "等待回答";
+  const autoLabel = state.autoMode === "off" ? "自动回答关闭" : state.autoStatus === "confirmed" ? "即将自动回答" : state.autoStatus === "waiting" ? "等待问题完成" : state.autoStatus === "generating" ? "自动回答中" : state.autoMode === "auto" ? "全自动" : "辅助自动";
   const submitDisabled = !state.sessionActive || state.sessionPaused || state.answerStatus === "generating" || (state.sessionMode === "answer" && !questionDraft.trim());
   const regenerateDisabled = !state.sessionActive || state.answerStatus === "generating" || !state.lastQuestion.trim() || !state.llmReady;
   const overlayStyle = { opacity: state.overlaySettings.opacity, "--overlay-font-scale": state.overlaySettings.fontScale } as CSSProperties;
@@ -293,7 +299,7 @@ function Overlay() {
     <section className="overlay-body">
       <div className="overlay-toolbar">
         <label><span>测试内容</span><select value={testMode} onChange={(event) => changeMode(event.target.value as TestMode)} disabled={state.sessionActive}><option value="all">全部启动</option><option value="asr">语音转文字</option><option value="answer">问题回答</option></select></label>
-        <span className={"overlay-status " + (state.sessionActive ? "active" : "")}><i />{state.statusLabel} · {modeLabel}</span>
+        <span className={"overlay-status " + (state.sessionActive ? "active" : "")}><i />{state.statusLabel} · {modeLabel} · {autoLabel}</span>
         <button className="overlay-icon-button" title={state.overlaySettings.alwaysOnTop ? "取消置顶" : "置顶悬浮窗"} onClick={() => changeOverlaySettings({ alwaysOnTop: !state.overlaySettings.alwaysOnTop })}>{state.overlaySettings.alwaysOnTop ? "置顶" : "普通"}</button>
         <button className="overlay-icon-button" title="打开上下文抽屉" onClick={() => setContextOpen((open) => !open)}>上下文</button>
       </div>
@@ -311,7 +317,7 @@ function Overlay() {
         <span>当前轮数：{state.turnCount} · 承接 {state.carriedTurnCount} 轮</span>
         {state.sourceTitle && <span>来源会话：{state.sourceTitle}</span>}
       </aside>}
-      <div className="overlay-actions">{state.sessionActive ? <><button className="danger" onClick={() => sendCommand("stop")}>结束会话</button><button onClick={() => sendCommand("pause")} disabled={state.answerStatus === "generating"}>{state.sessionPaused ? "继续" : "暂停"}</button>{state.answerStatus === "generating" ? <button className="danger" onClick={() => sendCommand("stop-generation")}>停止生成</button> : <button className="primary" disabled={submitDisabled} onClick={() => sendCommand("submit")}>提交当前问题</button>}<button disabled={regenerateDisabled} onClick={() => sendCommand("regenerate")}>重新生成</button></> : <button className="primary" disabled={testMode === "all" ? !state.llmReady || !state.asrReady : testMode === "asr" ? !state.asrReady : !state.llmReady} onClick={() => sendCommand("start")}>启动测试</button>}<span>{copyNotice || state.notice}</span></div>
+      <div className="overlay-actions">{state.sessionActive ? <><button className="danger" onClick={() => sendCommand("stop")}>结束会话</button><button onClick={() => sendCommand("pause")} disabled={state.answerStatus === "generating"}>{state.sessionPaused ? "继续" : "暂停"}</button>{state.autoStatus === "confirmed" ? <button onClick={() => sendCommand("cancel-auto")}>取消自动回答</button> : state.answerStatus === "generating" ? <button className="danger" onClick={() => sendCommand("stop-generation")}>停止生成</button> : <button className="primary" disabled={submitDisabled} onClick={() => sendCommand("submit")}>提交当前问题</button>}<button disabled={regenerateDisabled} onClick={() => sendCommand("regenerate")}>重新生成</button></> : <button className="primary" disabled={testMode === "all" ? !state.llmReady || !state.asrReady : testMode === "asr" ? !state.asrReady : !state.llmReady} onClick={() => sendCommand("start")}>启动测试</button>}<span>{copyNotice || state.notice}</span></div>
       <div className="overlay-field-heading"><strong>当前问题</strong><small>{state.sessionMode === "answer" ? "可直接输入并提交" : "可编辑转写文本"}</small></div>
       <textarea className="overlay-question" value={questionDraft} onChange={(event) => changeQuestion(event.target.value)} placeholder="输入或等待当前面试问题…" />
       {showTranscript && <div className="overlay-transcript-block"><div className="overlay-partial" onWheel={(event) => { if (!state.wheelScroll.transcript) event.preventDefault(); }}><span>实时增量转写</span><p>{state.partial || "等待系统音频…"}</p></div></div>}
@@ -338,6 +344,7 @@ function App() {
   const [sessionMode, setSessionMode] = useState<SessionMode>("idle");
   const [testMode, setTestMode] = useState<TestMode>("all");
   const [asrStatus, setAsrStatus] = useState<AsrStatus>("idle");
+  const [autoStatus, setAutoStatus] = useState<AutoInterviewStatus>("idle");
   const [answerStatus, setAnswerStatus] = useState<AnswerStatus>("idle");
   const [partial, setPartial] = useState("");
   const [question, setQuestion] = useState("");
@@ -372,7 +379,13 @@ function App() {
   const overlayUnlistenRef = useRef<Array<() => void>>([]);
   const overlayStatePersistTimerRef = useRef<number | undefined>(undefined);
   const draftPersistTimerRef = useRef<number | undefined>(undefined);
-  const overlayActionsRef = useRef<{ start: (mode: TestMode) => void; submit: () => void; stop: () => void; pause: () => void; stopGeneration: () => void; regenerate: () => void }>({ start: () => {}, submit: () => {}, stop: () => {}, pause: () => {}, stopGeneration: () => {}, regenerate: () => {} });
+  const autoSubmitTimerRef = useRef<number | undefined>(undefined);
+  const autoCandidateRef = useRef("");
+  const autoLastSubmittedRef = useRef("");
+  const autoClassificationAbortRef = useRef<AbortController | null>(null);
+  const sessionPausedRef = useRef(false);
+  const sessionActiveRef = useRef(false);
+  const overlayActionsRef = useRef<{ start: (mode: TestMode) => void; submit: () => void; cancelAuto: () => void; stop: () => void; pause: () => void; stopGeneration: () => void; regenerate: () => void }>({ start: () => {}, submit: () => {}, cancelAuto: () => {}, stop: () => {}, pause: () => {}, stopGeneration: () => {}, regenerate: () => {} });
   const closeToTrayRef = useRef(true);
   const generationAbortRef = useRef<AbortController | null>(null);
   const lastQuestionRef = useRef("");
@@ -406,9 +419,11 @@ function App() {
   const overlayMaterialsLabel = materials.confirmed ? "已确认并用于回答" : hasMaterials ? "有材料，等待确认" : "未添加材料";
   const sessionStage: SessionStage = answerStatus === "generating" ? "answering" : answerStatus === "complete" ? "complete" : !sessionActive ? "idle" : sessionMode === "answer" ? "manual" : asrStatus === "finalizing" ? "finalizing" : "listening";
   const effectiveAnswerFramework = sessionFrameworkOverride || settings.answerFramework;
-  const statusLabel = sessionPaused ? "已暂停" : sessionStage === "manual" ? "等待输入" : sessionStage === "answering" ? "正在生成回答" : sessionStage === "complete" ? sessionMode === "asr" ? "转写已完成" : "回答已完成" : sessionStage === "listening" ? "正在聆听" : sessionStage === "finalizing" ? "正在提交问题" : sessionStage === "idle" && !llmReady && testMode !== "asr" ? "待配置模型" : sessionStage === "idle" ? "未开始" : "连接异常";
+  const statusLabel = sessionPaused ? "已暂停" : answerStatus === "generating" ? "正在生成回答" : autoStatus === "waiting" ? "等待问题完成" : autoStatus === "confirmed" ? "即将自动回答" : sessionStage === "manual" ? "等待输入" : sessionStage === "complete" ? sessionMode === "asr" ? "转写已完成" : "回答已完成" : sessionStage === "listening" ? "正在聆听" : sessionStage === "finalizing" ? "正在提交问题" : sessionStage === "idle" && !llmReady && testMode !== "asr" ? "待配置模型" : sessionStage === "idle" ? "未开始" : "连接异常";
   testModeRef.current = testMode;
   closeToTrayRef.current = settings.closeToTray;
+  sessionPausedRef.current = sessionPaused;
+  sessionActiveRef.current = sessionActive;
 
   function queueOverlayWindowState(patch: Partial<OverlaySettings>) {
     if (overlayStatePersistTimerRef.current) window.clearTimeout(overlayStatePersistTimerRef.current);
@@ -643,10 +658,12 @@ function App() {
       completeContextTurnCount: contextStats.total,
       sentContextTurnCount: contextStats.sent,
       omittedContextTurnCount: contextStats.omitted,
+      autoMode: settings.autoInterview.mode,
+      autoStatus,
     };
     overlayStateRef.current = state;
     void emitTo("answer-overlay", "overlay-state", state).catch(() => undefined);
-  }, [desktopRuntime, isOverlayWindow, answer, question, partial, sessionActive, sessionPaused, sessionMode, testMode, answerStatus, asrStatus, turnCount, notice, statusLabel, activeSessionTitle, activeSessionCarriedTurnCount, activeSessionSourceTitle, llmReady, asrReady, contextStats, settings.overlay, settings.wheelScroll, settings.interviewFocus, overlayMaterialsLabel]);
+  }, [desktopRuntime, isOverlayWindow, answer, question, partial, sessionActive, sessionPaused, sessionMode, testMode, answerStatus, asrStatus, autoStatus, turnCount, notice, statusLabel, activeSessionTitle, activeSessionCarriedTurnCount, activeSessionSourceTitle, llmReady, asrReady, contextStats, settings.overlay, settings.wheelScroll, settings.interviewFocus, settings.autoInterview.mode, overlayMaterialsLabel]);
   useEffect(() => {
     if (!desktopRuntime || isOverlayWindow) return;
     let unlisten: () => void = () => {};
@@ -899,6 +916,68 @@ function App() {
     setPartial(value);
   }
 
+  function cancelAutoSubmit() {
+    if (autoSubmitTimerRef.current) window.clearTimeout(autoSubmitTimerRef.current);
+    autoSubmitTimerRef.current = undefined;
+    autoCandidateRef.current = "";
+    autoClassificationAbortRef.current?.abort();
+    autoClassificationAbortRef.current = null;
+    pendingRef.current = false;
+    setAutoStatus("idle");
+    if (sessionActive && sessionMode !== "answer") setAsrStatus("listening");
+    setNotice("已取消本次自动回答，仍可手动编辑并提交当前问题。");
+  }
+
+  function scheduleAutomaticAnswer(candidate: string, mode: SessionMode = "all") {
+    if (!activeSessionIdRef.current || mode !== "all" || !settings.autoInterview.autoGenerate || settings.autoInterview.mode === "off") return;
+    const normalized = candidate.trim();
+    if (!normalized) return;
+    const assessment = assessQuestion(normalized);
+    if (!assessment.isQuestion || assessment.confidence < 0.5) {
+      setAutoStatus(assessment.isQuestion ? "waiting" : "idle");
+      if (assessment.isQuestion) setNotice(`已识别到疑似问题，等待补充（置信度 ${Math.round(assessment.confidence * 100)}%）。`);
+      return;
+    }
+    if (normalizeQuestionFingerprint(normalized) === normalizeQuestionFingerprint(autoLastSubmittedRef.current)) return;
+    if (autoSubmitTimerRef.current) window.clearTimeout(autoSubmitTimerRef.current);
+    autoCandidateRef.current = normalized;
+    setAutoStatus("confirmed");
+    setNotice(`问题已确认，${Math.round(settings.autoInterview.submitDelayMs / 100) / 10} 秒后自动生成，可点击取消。`);
+    autoSubmitTimerRef.current = window.setTimeout(() => {
+      autoSubmitTimerRef.current = undefined;
+      const current = autoCandidateRef.current;
+      if (!current || !activeSessionIdRef.current || !sessionActiveRef.current || sessionPausedRef.current || generationAbortRef.current) return;
+      const controller = new AbortController();
+      autoClassificationAbortRef.current = controller;
+      setAutoStatus("waiting");
+      setNotice("正在确认当前文本是否已形成完整问题…");
+      void (async () => {
+        let confirmed: { isQuestion: boolean; isComplete: boolean; needsFollowup: boolean; confidence: number; reason?: string } = { ...assessment, needsFollowup: false };
+        try {
+          if (activeProfile) {
+            const classification = await classifyInterviewQuestion(activeProfile, current, controller.signal);
+            if (classification) confirmed = classification;
+          }
+        } catch (error) {
+          if (controller.signal.aborted) return;
+          log(`自动问题判断失败：${error instanceof Error ? error.message : String(error)}`);
+        } finally {
+          if (autoClassificationAbortRef.current === controller) autoClassificationAbortRef.current = null;
+        }
+        if (!activeSessionIdRef.current || !sessionActiveRef.current || sessionPausedRef.current || generationAbortRef.current) return;
+        if (!confirmed.isQuestion || !confirmed.isComplete || confirmed.needsFollowup || confirmed.confidence < settings.autoInterview.confidenceThreshold) {
+          setAutoStatus(confirmed.isQuestion ? "waiting" : "idle");
+          setNotice(confirmed.needsFollowup ? "问题还在补充中，系统会继续合并下一段转写。" : "当前内容暂未确认成完整问题，可继续说完或手动提交。");
+          return;
+        }
+        autoLastSubmittedRef.current = current;
+        autoCandidateRef.current = "";
+        setAutoStatus("generating");
+        void generateAnswer(current);
+      })();
+    }, settings.autoInterview.submitDelayMs);
+  }
+
   function beginInterview(draftMode: TestMode = testModeRef.current) {
     const now = new Date().toISOString();
     const carriedContext = loadedContextRef.current.filter((turn) => turn.included);
@@ -1059,20 +1138,30 @@ function App() {
       setNotice("豆包预配置已保存，但当前桌面端尚未接入其自定义二进制帧与 Authorization 请求头；请选择阿里云或通用 WebSocket 后开始会话。");
       return;
     }
+    const handleAsrText = (text: string) => {
+      const completeQuestion = settings.autoInterview.mergeFollowups
+        ? mergeTranscript(questionRef.current, text)
+        : text.trim();
+      if (!completeQuestion) return;
+      updateCurrentQuestion(completeQuestion);
+      updateCurrentPartial("");
+      if (mode === "all" && settings.autoInterview.mode !== "off") {
+        pendingRef.current = false;
+        scheduleAutomaticAnswer(completeQuestion, mode);
+      } else if (pendingRef.current && mode === "all") {
+        void generateAnswer(completeQuestion);
+      }
+      if (pendingRef.current && mode === "asr") {
+        pendingRef.current = false;
+        setAsrStatus("listening");
+        setNotice("语音转文字已完成，结果已写入当前问题框。");
+      }
+    };
     const asr = new GenericAsrSession(settings.asr, {
       onStatus: (status) => setAsrStatus(status),
       onPartial: updateCurrentPartial,
-      onFinal: (text) => {
-        const completeQuestion = questionRef.current ? `${questionRef.current}${text}` : text;
-        updateCurrentQuestion(completeQuestion);
-        updateCurrentPartial("");
-        if (pendingRef.current && mode === "all") void generateAnswer(completeQuestion);
-        if (pendingRef.current && mode === "asr") {
-          pendingRef.current = false;
-          setAsrStatus("listening");
-          setNotice("语音转文字已完成，结果已写入当前问题框。");
-        }
-      },
+      onSegment: handleAsrText,
+      onFinal: handleAsrText,
       onError: (message) => { setAsrStatus("error"); setNotice(message); },
       onDebug: log,
     });
@@ -1085,6 +1174,7 @@ function App() {
       setSessionPaused(false);
       setSessionMode(mode);
       setAsrStatus("listening");
+      setAutoStatus(mode === "all" && settings.autoInterview.mode !== "off" ? "idle" : "idle");
       setNotice(resumeExisting ? "ASR 已重新连接，当前面试上下文保持不变。" : mode === "asr" ? "正在捕获系统音频并进行语音转文字。原始音频不会保存。" : materials.confirmed ? "正在捕获默认系统输出并发送给 ASR。原始音频不会保存。" : "正在捕获系统音频；未确认候选人材料，将使用通用回答上下文。");
     } catch (error) {
       asr.close();
@@ -1107,6 +1197,7 @@ function App() {
     setSessionPaused(false);
     setSessionMode("answer");
     setAsrStatus("idle");
+    setAutoStatus("idle");
     setPartial("");
     setNotice("本次面试已开始。可直接输入第一个问题；之后每次提交都会延续同一场面试的上下文。");
   }
@@ -1132,6 +1223,12 @@ function App() {
     void startSession(mode);
   }
   async function stopSession() {
+    if (autoSubmitTimerRef.current) window.clearTimeout(autoSubmitTimerRef.current);
+    autoSubmitTimerRef.current = undefined;
+    autoCandidateRef.current = "";
+    autoLastSubmittedRef.current = "";
+    autoClassificationAbortRef.current?.abort();
+    autoClassificationAbortRef.current = null;
     generationAbortRef.current?.abort();
     generationAbortRef.current = null;
     const wasAsrSession = sessionMode === "asr" || sessionMode === "all";
@@ -1144,7 +1241,7 @@ function App() {
     draftRef.current = undefined;
     activeSessionIdRef.current = "";
     questionRef.current = "";
-    setSessionActive(false); setSessionPaused(false); setSessionMode("idle"); setAsrStatus("idle"); setPartial(""); setQuestion(""); pendingRef.current = false;
+    setSessionActive(false); setSessionPaused(false); setSessionMode("idle"); setAsrStatus("idle"); setAutoStatus("idle"); setPartial(""); setQuestion(""); pendingRef.current = false;
     setActiveSessionTitle("");
     setActiveSessionSourceTitle("");
     setActiveSessionCarriedTurnCount(0);
@@ -1162,6 +1259,14 @@ function App() {
       }
       if (desktopRuntime && wasAsrSession) await invoke(nextPaused ? "pause_system_audio_capture" : "resume_system_audio_capture");
       setSessionPaused(nextPaused);
+      if (nextPaused) {
+        if (autoSubmitTimerRef.current) window.clearTimeout(autoSubmitTimerRef.current);
+        autoSubmitTimerRef.current = undefined;
+        autoCandidateRef.current = "";
+        setAutoStatus("paused");
+      } else {
+        setAutoStatus("idle");
+      }
       persistActiveDraft({ paused: nextPaused });
       if (nextPaused) {
         pendingRef.current = false;
@@ -1184,6 +1289,10 @@ function App() {
       setNotice("当前会话已暂停，请先点击“继续”。");
       return;
     }
+    if (autoSubmitTimerRef.current) window.clearTimeout(autoSubmitTimerRef.current);
+    autoSubmitTimerRef.current = undefined;
+    autoCandidateRef.current = "";
+    setAutoStatus("idle");
     if (sessionMode === "answer") {
       if (!questionRef.current.trim()) { setNotice("请先输入要测试的问题。"); return; }
       await generateAnswer(questionRef.current);
@@ -1218,6 +1327,10 @@ function App() {
   async function generateAnswer(rawQuestion: string) {
     const finalQuestion = rawQuestion.trim();
     if (!finalQuestion || answerStatus === "generating" || !activeProfile) return;
+    if (autoSubmitTimerRef.current) window.clearTimeout(autoSubmitTimerRef.current);
+    autoSubmitTimerRef.current = undefined;
+    autoCandidateRef.current = "";
+    setAutoStatus("generating");
     lastQuestionRef.current = finalQuestion;
     const abortController = new AbortController();
     generationAbortRef.current = abortController;
@@ -1243,6 +1356,7 @@ function App() {
       const cleanAnswer = sanitizeAnswerText(full);
       if (!cleanAnswer.trim()) throw new Error("模型未返回可用回答");
       setAnswerStatus("complete");
+      setAutoStatus("idle");
       interviewTurnsRef.current = [...previousTurns, { question: finalQuestion, answer: cleanAnswer }];
       completeHistoryCountRef.current += 1;
       setTurnCount(interviewTurnsRef.current.length);
@@ -1251,11 +1365,12 @@ function App() {
     } catch (error) {
       if (abortController.signal.aborted) {
         setAnswerStatus("idle");
+        setAutoStatus("idle");
         setNotice("已停止生成，当前未完成回答不会写入上下文。");
         return;
       }
       const message = sanitizeLlmError(error, activeProfile.apiKey);
-      setAnswerStatus("error"); setNotice(message);
+      setAnswerStatus("error"); setAutoStatus("error"); setNotice(message);
       appendSessionRecord({ id: crypto.randomUUID(), createdAt: new Date().toISOString(), question: finalQuestion, answer: "", asrName: settings.asr.name, llmName: activeProfile.name, error: message });
     } finally {
       if (generationAbortRef.current === abortController) generationAbortRef.current = null;
@@ -1434,6 +1549,7 @@ function App() {
   overlayActionsRef.current = {
     start: (mode) => startTest(mode),
     submit: () => { void submitQuestion(); },
+    cancelAuto: () => cancelAutoSubmit(),
     stop: () => { void stopSession(); },
     pause: () => { void toggleSessionPause(); },
     stopGeneration: () => stopGeneration(),
@@ -1453,6 +1569,8 @@ function App() {
           overlayActionsRef.current.start(mode);
         } else if (payload.command === "submit") {
           overlayActionsRef.current.submit();
+        } else if (payload.command === "cancel-auto") {
+          overlayActionsRef.current.cancelAuto();
         } else if (payload.command === "stop") {
           overlayActionsRef.current.stop();
         } else if (payload.command === "pause") {
@@ -1493,7 +1611,7 @@ function App() {
       {tab === "session" && <section className="session-grid">
         <div className="panel session-panel">
           <div className="panel-head session-head"><div><div className="panel-kicker">LIVE SESSION</div><h2>系统音频会话</h2><p>默认输出设备 · PCM16 / Mono / 16kHz</p></div><span className={`session-badge ${sessionStage}`}><i />{statusLabel}</span></div>
-          <div className="session-actions"><div className="button-row">{sessionActive ? <><button className="danger" onClick={() => void stopSession()}>结束会话</button><button onClick={() => void toggleSessionPause()} disabled={answerStatus === "generating"}>{sessionPaused ? "继续" : "暂停"}</button></> : <><button className="primary" onClick={() => startTest()}>启动测试</button><label className="test-mode"><span>测试内容</span><select value={testMode} onChange={(event) => setTestMode(event.target.value as TestMode)}><option value="all">全部启动</option><option value="asr">语音转文字</option><option value="answer">问题回答</option></select></label></>}{sessionActive && sessionMode !== "answer" && <button className="primary submit-button" disabled={sessionPaused} onClick={() => void submitQuestion()}>提交当前问题</button>}</div><span className="action-hint">{sessionPaused ? "当前会话已暂停，点击“继续”后恢复" : !settings.shortcutEnabled ? "快捷键已关闭，可使用按钮提交当前问题" : testMode === "asr" && !asrReady ? "先在服务配置中填写 ASR 凭证" : testMode === "answer" && !llmReady ? "先在服务配置中填写文本模型" : testMode === "all" && (!llmReady || !asrReady) ? "全部启动需要同时配置 ASR 与文本模型" : sessionStage === "listening" ? `听到问题后按 ${settings.shortcut} 提交` : sessionStage === "finalizing" ? "正在等待最终转写文本" : sessionStage === "answering" ? "回答会同步显示在右侧" : testMode === "asr" ? "单独验证实时语音转文字" : testMode === "answer" ? "直接输入问题验证回答效果" : "同时验证转写与问题回答"}</span></div>
+          <div className="session-actions"><div className="button-row">{sessionActive ? <><button className="danger" onClick={() => void stopSession()}>结束会话</button><button onClick={() => void toggleSessionPause()} disabled={answerStatus === "generating"}>{sessionPaused ? "继续" : "暂停"}</button></> : <><button className="primary" onClick={() => startTest()}>启动测试</button><label className="test-mode"><span>测试内容</span><select value={testMode} onChange={(event) => setTestMode(event.target.value as TestMode)}><option value="all">全部启动</option><option value="asr">语音转文字</option><option value="answer">问题回答</option></select></label></>}{sessionActive && sessionMode !== "answer" && <button className="primary submit-button" disabled={sessionPaused} onClick={() => autoStatus === "confirmed" ? cancelAutoSubmit() : void submitQuestion()}>{autoStatus === "confirmed" ? "取消自动回答" : "提交当前问题"}</button>}</div><span className="action-hint">{sessionPaused ? "当前会话已暂停，点击“继续”后恢复" : autoStatus === "waiting" ? "已识别到疑似问题，正在等待面试官补充" : autoStatus === "confirmed" ? "问题已确认，将自动生成回答；点击按钮可取消" : settings.autoInterview.mode === "off" ? (!settings.shortcutEnabled ? "快捷键已关闭，可使用按钮提交当前问题" : testMode === "asr" || testMode === "all" ? `听到问题后按 ${settings.shortcut} 提交` : "可直接输入问题并提交") : "自动模式已开启，识别到完整问题后会自动生成回答"}</span></div>
           <div className="field-heading"><label>实时增量转写</label><span className={asrStatus === "listening" ? "live-dot" : ""}>{asrStatus === "listening" ? "正在接收" : "等待开始"}</span></div>
           <div className="transcript scroll-region" onWheel={(event) => { if (!settings.wheelScroll.transcript) event.preventDefault(); }}>{partial || "等待系统音频…"}</div>
           <div className="field-heading"><label>转写结果 / 当前问题</label><button className="text-button" disabled={!question && !partial} onClick={clearCurrentQuestion}>清空</button></div>
@@ -1519,6 +1637,7 @@ function App() {
       {tab === "settings" && <section className="settings-stack"><AsrProviderPanel settings={settings} asrProfileTests={asrProfileTests} expandedPresetIds={expandedAsrPresetIds} onToggleExpanded={toggleAsrPresetExpanded} onSelect={selectAsrPreset} onUpdate={updateAsrProfile} onTest={testAsrProfile} onSave={saveConfiguration} />
         <LlmProviderPanel settings={settings} setSettings={setSettings} profileTests={profileTests} profileUsages={profileUsages} profileModelStates={profileModelStates} profileQuery={profileQuery} profileSort={profileSort} expandedProfileIds={expandedProfileIds} setProfileQuery={setProfileQuery} setProfileSort={setProfileSort} onToggleExpanded={toggleProfileExpanded} onAddPreset={addProfileFromPreset} onApplyPreset={applyProfilePreset} onDuplicate={duplicateProfile} onRemove={removeProfile} onMove={moveProfile} onTest={testProfile} onUsage={queryProfileUsage} onLoadModels={loadProfileModels} onInvalidateTest={(id) => setProfileTests((state) => { const next = { ...state }; delete next[id]; return next; })} onInvalidateUsage={(id) => setProfileUsages((state) => { const next = { ...state }; delete next[id]; return next; })} onSave={saveConfiguration} />
         <div className="panel"><div className="panel-head"><div><h2>回答策略</h2><p>默认策略会用于新会话；会话页可以临时覆盖，不会改动这里的配置。</p></div></div><div className="form-grid"><Field label="面试方向" value={settings.interviewFocus} onChange={(value) => setSettings((state) => ({ ...state, interviewFocus: value as InterviewFocus }))} select={Object.entries(INTERVIEW_FOCUS_LABELS)} /><Field label="默认回答框架" value={settings.answerFramework} onChange={(value) => setSettings((state) => ({ ...state, answerFramework: value as AnswerFramework }))} select={Object.entries(ANSWER_FRAMEWORK_LABELS)} /></div></div>
+        <div className="panel"><div className="panel-head"><div><h2>自动语音回答</h2><p>只在“全部启动”会话中生效。系统会先等待问题补充，再自动调用大模型；关闭后恢复手动提交。</p></div><span className={`context-state ${settings.autoInterview.mode === "off" ? "muted" : "ready"}`}><i />{settings.autoInterview.mode === "off" ? "手动模式" : settings.autoInterview.mode === "auto" ? "全自动" : "辅助自动"}</span></div><div className="form-grid"><Field label="自动模式" value={settings.autoInterview.mode} onChange={(value) => setSettings((state) => ({ ...state, autoInterview: { ...state.autoInterview, mode: value as AutoInterviewMode } }))} select={[["off", "关闭（手动提交）"], ["assist", "辅助自动"], ["auto", "全自动"]]} /><label className="field"><span>自动提交等待 · {settings.autoInterview.submitDelayMs} ms</span><input type="range" min="500" max="5000" step="100" value={settings.autoInterview.submitDelayMs} onChange={(event) => setSettings((state) => ({ ...state, autoInterview: { ...state.autoInterview, submitDelayMs: Number(event.target.value) } }))} /></label><label className="field"><span>问题置信度 · {Math.round(settings.autoInterview.confidenceThreshold * 100)}%</span><input type="range" min="0.5" max="0.95" step="0.01" value={settings.autoInterview.confidenceThreshold} onChange={(event) => setSettings((state) => ({ ...state, autoInterview: { ...state.autoInterview, confidenceThreshold: Number(event.target.value) } }))} /></label></div><div className="settings-toggle-grid"><label className="checkbox"><input type="checkbox" checked={settings.autoInterview.mergeFollowups} onChange={(event) => setSettings((state) => ({ ...state, autoInterview: { ...state.autoInterview, mergeFollowups: event.target.checked } }))} />合并连续补充和追问</label><label className="checkbox"><input type="checkbox" checked={settings.autoInterview.autoGenerate} onChange={(event) => setSettings((state) => ({ ...state, autoInterview: { ...state.autoInterview, autoGenerate: event.target.checked } }))} />识别完整问题后自动生成回答</label><label className="checkbox"><input type="checkbox" checked={settings.autoInterview.showOverlayStatus} onChange={(event) => setSettings((state) => ({ ...state, autoInterview: { ...state.autoInterview, showOverlayStatus: event.target.checked } }))} />在悬浮窗显示自动状态</label></div></div>
         <div className="panel"><div className="panel-head"><div><h2>全局快捷键</h2><p>关闭后不会注册或响应该组快捷键；快捷键冲突时请更换组合。</p></div><label className="checkbox shortcut-toggle"><input type="checkbox" checked={settings.shortcutEnabled} onChange={(event) => setSettings((state) => ({ ...state, shortcutEnabled: event.target.checked }))} />启用快捷键</label></div><div className="shortcut-grid"><div className="shortcut-field"><span>提交当前问题</span><ShortcutRecorder value={settings.shortcut} onChange={(value) => setSettings((state) => ({ ...state, shortcut: value }))} /></div><div className="shortcut-field"><span>显示 / 隐藏悬浮窗</span><ShortcutRecorder value={settings.overlayToggleShortcut} onChange={(value) => setSettings((state) => ({ ...state, overlayToggleShortcut: value }))} /></div><div className="shortcut-field"><span>停止回答生成</span><ShortcutRecorder value={settings.stopGenerationShortcut} onChange={(value) => setSettings((state) => ({ ...state, stopGenerationShortcut: value }))} /></div><div className="shortcut-field"><span>切换点击穿透</span><ShortcutRecorder value={settings.clickThroughShortcut} onChange={(value) => setSettings((state) => ({ ...state, clickThroughShortcut: value }))} /></div></div></div>
         <OverlaySettingsPanel settings={settings.overlay} onChange={(patch) => setSettings((state) => ({ ...state, overlay: { ...state.overlay, ...patch } }))} />
         <div className="panel"><div className="panel-head"><div><h2>界面行为</h2><p>分别控制转写区和回答区是否响应鼠标滚轮。</p></div></div><div className="settings-toggle-grid"><label className="checkbox"><input type="checkbox" checked={settings.wheelScroll.transcript} onChange={(event) => setSettings((state) => ({ ...state, wheelScroll: { ...state.wheelScroll, transcript: event.target.checked } }))} />转写区允许滚轮滚动</label><label className="checkbox"><input type="checkbox" checked={settings.wheelScroll.answer} onChange={(event) => setSettings((state) => ({ ...state, wheelScroll: { ...state.wheelScroll, answer: event.target.checked } }))} />回答区允许滚轮滚动</label></div></div>
