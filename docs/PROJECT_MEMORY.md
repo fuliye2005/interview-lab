@@ -121,3 +121,12 @@
 - 主界面和悬浮窗在回答生成期间均允许暂停，满足全自动模式可随时暂停的要求。
 - 本地验证：新增/更新问题初筛单元覆盖；前端 `npm run build` 通过；`cargo check` 通过；`npm run tauri:build:exe` 通过。按用户要求未连接、模拟或验收真实 ASR API，也未生成安装包。
 - 代码提交 `cf877ed` 已推送到 `origin/main`；最终 `0.3.2` 单文件 EXE 已按该提交重新构建并复制到 `D:\Interview Lab\tauri-app-0.3.2.exe`，源文件与桌面副本 SHA-256 均为 `EC755D4559FC90C0AE699A18C7308E9FFD03E6D528F828088A743FD1235FD052`。
+
+## 0.3.3 自动语音交付收口（2026-08-21）
+
+- 版本已同步到 `0.3.3`（npm、Cargo、Tauri 配置及锁文件），原程序副本 `D:\AI辅助工具\interview-lab-original-0.2.18` 保持不变。
+- 自动回答状态机增加并发代次保护：新转写会取消旧问题分类，旧请求返回时不会覆盖当前问题或触发过时回答；全自动模式不再额外等待，辅助模式仍使用配置的等待时间；暂停、停止、关闭自动模式和 ASR 错误都会使旧判断失效。
+- 每场新面试记录保存非敏感配置快照（面试方向、回答框架、上下文窗口、模型名称/地址/协议/参数）；快照明确排除 API Key，不进入历史记录或导出数据。
+- 历史会话详情支持删除会话、删除指定轮次、从指定轮次继续创建下一轮，以及使用当前文本模型重新生成历史回答；会话详情展示启动时配置快照，既有历史数据保持兼容。
+- 本地检查：`npm run build` 通过；`npx vitest run src/lib/auto-question.test.ts src/lib/storage.test.ts` 为 29 项通过；`cargo check --locked` 通过；`git diff --check` 通过。未连接、模拟或验收真实 ASR API。
+- 代码提交 `a0447d3` 已推送到 `origin/main`。`0.3.3` 单文件 EXE 已构建并复制到 `D:\Interview Lab\tauri-app-0.3.3.exe`，文件版本为 `0.3.3`，SHA-256 为 `AD32F4C9A0EA7C18EC9211E5FCF7F5CAB8FFB5CECA2D98E89BC29293E7374F24`。本次未生成安装包。
