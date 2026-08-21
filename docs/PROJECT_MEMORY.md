@@ -120,4 +120,4 @@
 - ASR 采集错误会保留当前会话草稿和上下文，自动进入暂停状态，用户可点击“继续”重新连接；不再因采集线程异常直接丢失本轮会话。
 - 主界面和悬浮窗在回答生成期间均允许暂停，满足全自动模式可随时暂停的要求。
 - 本地验证：新增/更新问题初筛单元覆盖；前端 `npm run build` 通过；`cargo check` 通过；`npm run tauri:build:exe` 通过。按用户要求未连接、模拟或验收真实 ASR API，也未生成安装包。
-- `0.3.2` 单文件 EXE 已复制到 `D:\Interview Lab\tauri-app-0.3.2.exe`，源文件与桌面副本 SHA-256 均为 `C3B52347A5F28CA7F66604627BB0589A27B6356FDF8D72DD99DCE1DBD6CE4672`。
+- 代码提交 `cf877ed` 已推送到 `origin/main`；最终 `0.3.2` 单文件 EXE 已按该提交重新构建并复制到 `D:\Interview Lab\tauri-app-0.3.2.exe`，源文件与桌面副本 SHA-256 均为 `EC755D4559FC90C0AE699A18C7308E9FFD03E6D528F828088A743FD1235FD052`。
