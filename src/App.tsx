@@ -317,7 +317,7 @@ function Overlay() {
         <span>当前轮数：{state.turnCount} · 承接 {state.carriedTurnCount} 轮</span>
         {state.sourceTitle && <span>来源会话：{state.sourceTitle}</span>}
       </aside>}
-      <div className="overlay-actions">{state.sessionActive ? <><button className="danger" onClick={() => sendCommand("stop")}>结束会话</button><button onClick={() => sendCommand("pause")} disabled={state.answerStatus === "generating"}>{state.sessionPaused ? "继续" : "暂停"}</button>{state.autoStatus === "confirmed" ? <button onClick={() => sendCommand("cancel-auto")}>取消自动回答</button> : state.answerStatus === "generating" ? <button className="danger" onClick={() => sendCommand("stop-generation")}>停止生成</button> : <button className="primary" disabled={submitDisabled} onClick={() => sendCommand("submit")}>提交当前问题</button>}<button disabled={regenerateDisabled} onClick={() => sendCommand("regenerate")}>重新生成</button></> : <button className="primary" disabled={testMode === "all" ? !state.llmReady || !state.asrReady : testMode === "asr" ? !state.asrReady : !state.llmReady} onClick={() => sendCommand("start")}>启动测试</button>}<span>{copyNotice || state.notice}</span></div>
+      <div className="overlay-actions">{state.sessionActive ? <><button className="danger" onClick={() => sendCommand("stop")}>结束会话</button><button onClick={() => sendCommand("pause")}>{state.sessionPaused ? "继续" : "暂停"}</button>{state.autoStatus === "confirmed" ? <button onClick={() => sendCommand("cancel-auto")}>取消自动回答</button> : state.answerStatus === "generating" ? <button className="danger" onClick={() => sendCommand("stop-generation")}>停止生成</button> : <button className="primary" disabled={submitDisabled} onClick={() => sendCommand("submit")}>提交当前问题</button>}<button disabled={regenerateDisabled} onClick={() => sendCommand("regenerate")}>重新生成</button></> : <button className="primary" disabled={testMode === "all" ? !state.llmReady || !state.asrReady : testMode === "asr" ? !state.asrReady : !state.llmReady} onClick={() => sendCommand("start")}>启动测试</button>}<span>{copyNotice || state.notice}</span></div>
       <div className="overlay-field-heading"><strong>当前问题</strong><small>{state.sessionMode === "answer" ? "可直接输入并提交" : "可编辑转写文本"}</small></div>
       <textarea className="overlay-question" value={questionDraft} onChange={(event) => changeQuestion(event.target.value)} placeholder="输入或等待当前面试问题…" />
       {showTranscript && <div className="overlay-transcript-block"><div className="overlay-partial" onWheel={(event) => { if (!state.wheelScroll.transcript) event.preventDefault(); }}><span>实时增量转写</span><p>{state.partial || "等待系统音频…"}</p></div></div>}
@@ -385,6 +385,8 @@ function App() {
   const autoPendingFingerprintRef = useRef("");
   const deferredQuestionRef = useRef("");
   const autoClassificationAbortRef = useRef<AbortController | null>(null);
+  const autoInterviewRef = useRef(settings.autoInterview);
+  const asrFailureRef = useRef<(message: string) => void>(() => {});
   const sessionPausedRef = useRef(false);
   const sessionActiveRef = useRef(false);
   const overlayActionsRef = useRef<{ start: (mode: TestMode) => void; submit: () => void; cancelAuto: () => void; stop: () => void; pause: () => void; stopGeneration: () => void; regenerate: () => void }>({ start: () => {}, submit: () => {}, cancelAuto: () => {}, stop: () => {}, pause: () => {}, stopGeneration: () => {}, regenerate: () => {} });
@@ -424,6 +426,7 @@ function App() {
   const statusLabel = sessionPaused ? "已暂停" : answerStatus === "generating" ? "正在生成回答" : autoStatus === "waiting" ? "等待问题完成" : autoStatus === "confirmed" ? "即将自动回答" : sessionStage === "manual" ? "等待输入" : sessionStage === "complete" ? sessionMode === "asr" ? "转写已完成" : "回答已完成" : sessionStage === "listening" ? "正在聆听" : sessionStage === "finalizing" ? "正在提交问题" : sessionStage === "idle" && !llmReady && testMode !== "asr" ? "待配置模型" : sessionStage === "idle" ? "未开始" : "连接异常";
   testModeRef.current = testMode;
   closeToTrayRef.current = settings.closeToTray;
+  autoInterviewRef.current = settings.autoInterview;
   sessionPausedRef.current = sessionPaused;
   sessionActiveRef.current = sessionActive;
 
@@ -506,6 +509,20 @@ function App() {
   useEffect(() => { if (storageReady && !isOverlayWindow) void saveSettings(settings); }, [settings, storageReady, isOverlayWindow]);
   useEffect(() => { if (storageReady && !isOverlayWindow) void saveMaterials(materials); }, [materials, storageReady, isOverlayWindow]);
   useEffect(() => { if (storageReady && !isOverlayWindow) void saveHistory(history); }, [history, storageReady, isOverlayWindow]);
+  useEffect(() => {
+    if (settings.autoInterview.mode !== "off" && settings.autoInterview.autoGenerate) return;
+    const hasPendingAutomaticWork = Boolean(autoSubmitTimerRef.current || autoClassificationAbortRef.current || deferredQuestionRef.current);
+    if (!hasPendingAutomaticWork) return;
+    if (autoSubmitTimerRef.current) window.clearTimeout(autoSubmitTimerRef.current);
+    autoSubmitTimerRef.current = undefined;
+    autoCandidateRef.current = "";
+    autoPendingFingerprintRef.current = "";
+    deferredQuestionRef.current = "";
+    autoClassificationAbortRef.current?.abort();
+    autoClassificationAbortRef.current = null;
+    setAutoStatus("idle");
+    setNotice("自动回答已关闭，待处理的自动判断已取消。");
+  }, [settings.autoInterview.mode, settings.autoInterview.autoGenerate]);
   useEffect(() => {
     if (!storageReady || !draftHydrated || isOverlayWindow || !sessionActive || !activeSessionIdRef.current) return;
     if (draftPersistTimerRef.current) window.clearTimeout(draftPersistTimerRef.current);
@@ -598,13 +615,7 @@ function App() {
     if (!desktopRuntime || isOverlayWindow) return;
     let unlisten: () => void = () => {};
     void listen<string>("audio-capture-error", (event) => {
-      asrRef.current?.close();
-      asrRef.current = undefined;
-      pendingRef.current = false;
-      setSessionActive(false);
-      setSessionMode("idle");
-      setAsrStatus("error");
-      setNotice(`系统音频采集失败：${event.payload}`);
+      asrFailureRef.current(`系统音频采集失败：${event.payload}`);
     }).then((cleanup) => { unlisten = cleanup; });
     return () => unlisten();
   }, [desktopRuntime, isOverlayWindow]);
@@ -932,12 +943,39 @@ function App() {
     setNotice("已取消本次自动回答，仍可手动编辑并提交当前问题。");
   }
 
+  function handleAsrFailure(message: string) {
+    asrRef.current?.close();
+    asrRef.current = undefined;
+    pendingRef.current = false;
+    if (autoSubmitTimerRef.current) window.clearTimeout(autoSubmitTimerRef.current);
+    autoSubmitTimerRef.current = undefined;
+    autoCandidateRef.current = "";
+    autoPendingFingerprintRef.current = "";
+    deferredQuestionRef.current = "";
+    autoClassificationAbortRef.current?.abort();
+    autoClassificationAbortRef.current = null;
+    if (desktopRuntime) void invoke("pause_system_audio_capture").catch(() => undefined);
+    setAsrStatus("error");
+    if (sessionActiveRef.current) {
+      setSessionPaused(true);
+      setAutoStatus("error");
+      persistActiveDraft({ paused: true });
+      setNotice(`语音识别连接异常：${message}。当前会话已保留，点击“继续”可重新连接。`);
+    } else {
+      setSessionMode("idle");
+      setAutoStatus("idle");
+      setNotice(`语音识别连接异常：${message}`);
+    }
+  }
+  asrFailureRef.current = handleAsrFailure;
+
   function scheduleAutomaticAnswer(candidate: string, mode: SessionMode = "all") {
-    if (!activeSessionIdRef.current || mode !== "all" || !settings.autoInterview.autoGenerate || settings.autoInterview.mode === "off") return;
+    const autoSettings = autoInterviewRef.current;
+    if (!activeSessionIdRef.current || mode !== "all" || !autoSettings.autoGenerate || autoSettings.mode === "off") return;
     const normalized = candidate.trim();
     if (!normalized) return;
     if (generationAbortRef.current) {
-      deferredQuestionRef.current = settings.autoInterview.mergeFollowups
+      deferredQuestionRef.current = autoSettings.mergeFollowups
         ? mergeTranscript(deferredQuestionRef.current, normalized)
         : normalized;
       setAutoStatus("waiting");
@@ -951,6 +989,12 @@ function App() {
       if (assessment.isQuestion) setNotice(`已识别到疑似问题，等待补充（置信度 ${Math.round(assessment.confidence * 100)}%）。`);
       return;
     }
+    if (!assessment.isComplete) {
+      autoPendingFingerprintRef.current = "";
+      setAutoStatus("waiting");
+      setNotice("问题还未说完，系统会继续合并下一段转写。");
+      return;
+    }
     if (normalizeQuestionFingerprint(normalized) === normalizeQuestionFingerprint(autoLastSubmittedRef.current)) return;
     const fingerprint = normalizeQuestionFingerprint(normalized);
     if (fingerprint === autoPendingFingerprintRef.current) return;
@@ -958,11 +1002,15 @@ function App() {
     autoPendingFingerprintRef.current = fingerprint;
     autoCandidateRef.current = normalized;
     setAutoStatus("confirmed");
-    setNotice(`问题已确认，${Math.round(settings.autoInterview.submitDelayMs / 100) / 10} 秒后自动生成，可点击取消。`);
+    const submitDelayMs = autoSettings.mode === "auto" ? 0 : autoSettings.submitDelayMs;
+    setNotice(submitDelayMs === 0
+      ? "全自动模式已确认问题，正在准备回答。"
+      : `问题已确认，${Math.round(submitDelayMs / 100) / 10} 秒后自动生成，可点击取消。`);
     autoSubmitTimerRef.current = window.setTimeout(() => {
       autoSubmitTimerRef.current = undefined;
       const current = autoCandidateRef.current;
-      if (!current || !activeSessionIdRef.current || !sessionActiveRef.current || sessionPausedRef.current || generationAbortRef.current) {
+      const currentAutoSettings = autoInterviewRef.current;
+      if (!currentAutoSettings.autoGenerate || currentAutoSettings.mode === "off" || !current || !activeSessionIdRef.current || !sessionActiveRef.current || sessionPausedRef.current || generationAbortRef.current) {
         autoPendingFingerprintRef.current = "";
         return;
       }
@@ -983,8 +1031,9 @@ function App() {
         } finally {
           if (autoClassificationAbortRef.current === controller) autoClassificationAbortRef.current = null;
         }
-        if (!activeSessionIdRef.current || !sessionActiveRef.current || sessionPausedRef.current || generationAbortRef.current) return;
-        if (!confirmed.isQuestion || !confirmed.isComplete || confirmed.needsFollowup || confirmed.confidence < settings.autoInterview.confidenceThreshold) {
+        const latestAutoSettings = autoInterviewRef.current;
+        if (!latestAutoSettings.autoGenerate || latestAutoSettings.mode === "off" || !activeSessionIdRef.current || !sessionActiveRef.current || sessionPausedRef.current || generationAbortRef.current) return;
+        if (!confirmed.isQuestion || !confirmed.isComplete || confirmed.needsFollowup || confirmed.confidence < latestAutoSettings.confidenceThreshold) {
           autoPendingFingerprintRef.current = "";
           setAutoStatus(confirmed.isQuestion ? "waiting" : "idle");
           setNotice(confirmed.needsFollowup ? "问题还在补充中，系统会继续合并下一段转写。" : "当前内容暂未确认成完整问题，可继续说完或手动提交。");
@@ -1160,13 +1209,14 @@ function App() {
       return;
     }
     const handleAsrText = (text: string) => {
-      const completeQuestion = settings.autoInterview.mergeFollowups
+      const autoSettings = autoInterviewRef.current;
+      const completeQuestion = autoSettings.mergeFollowups
         ? mergeTranscript(questionRef.current, text)
         : text.trim();
       if (!completeQuestion) return;
       updateCurrentQuestion(completeQuestion);
       updateCurrentPartial("");
-      if (mode === "all" && settings.autoInterview.mode !== "off") {
+      if (mode === "all" && autoSettings.mode !== "off") {
         pendingRef.current = false;
         scheduleAutomaticAnswer(completeQuestion, mode);
       } else if (pendingRef.current && mode === "all") {
@@ -1183,7 +1233,7 @@ function App() {
       onPartial: updateCurrentPartial,
       onSegment: handleAsrText,
       onFinal: handleAsrText,
-      onError: (message) => { setAsrStatus("error"); setNotice(message); },
+      onError: handleAsrFailure,
       onDebug: log,
     });
     try {
@@ -1402,7 +1452,8 @@ function App() {
       if (generationAbortRef.current === abortController) generationAbortRef.current = null;
       const deferred = deferredQuestionRef.current;
       deferredQuestionRef.current = "";
-      if (completed && deferred && activeSessionIdRef.current && sessionActiveRef.current && !sessionPausedRef.current && settings.autoInterview.mode !== "off") {
+      const latestAutoSettings = autoInterviewRef.current;
+      if (completed && deferred && latestAutoSettings.autoGenerate && latestAutoSettings.mode !== "off" && activeSessionIdRef.current && sessionActiveRef.current && !sessionPausedRef.current) {
         window.setTimeout(() => scheduleAutomaticAnswer(deferred, "all"), 0);
       }
     }
@@ -1642,7 +1693,7 @@ function App() {
       {tab === "session" && <section className="session-grid">
         <div className="panel session-panel">
           <div className="panel-head session-head"><div><div className="panel-kicker">LIVE SESSION</div><h2>系统音频会话</h2><p>默认输出设备 · PCM16 / Mono / 16kHz</p></div><span className={`session-badge ${sessionStage}`}><i />{statusLabel}</span></div>
-          <div className="session-actions"><div className="button-row">{sessionActive ? <><button className="danger" onClick={() => void stopSession()}>结束会话</button><button onClick={() => void toggleSessionPause()} disabled={answerStatus === "generating"}>{sessionPaused ? "继续" : "暂停"}</button></> : <><button className="primary" onClick={() => startTest()}>启动测试</button><label className="test-mode"><span>测试内容</span><select value={testMode} onChange={(event) => setTestMode(event.target.value as TestMode)}><option value="all">全部启动</option><option value="asr">语音转文字</option><option value="answer">问题回答</option></select></label></>}{sessionActive && sessionMode !== "answer" && <button className="primary submit-button" disabled={sessionPaused} onClick={() => autoStatus === "confirmed" ? cancelAutoSubmit() : void submitQuestion()}>{autoStatus === "confirmed" ? "取消自动回答" : "提交当前问题"}</button>}</div><span className="action-hint">{sessionPaused ? "当前会话已暂停，点击“继续”后恢复" : autoStatus === "waiting" ? "已识别到疑似问题，正在等待面试官补充" : autoStatus === "confirmed" ? "问题已确认，将自动生成回答；点击按钮可取消" : settings.autoInterview.mode === "off" ? (!settings.shortcutEnabled ? "快捷键已关闭，可使用按钮提交当前问题" : testMode === "asr" || testMode === "all" ? `听到问题后按 ${settings.shortcut} 提交` : "可直接输入问题并提交") : "自动模式已开启，识别到完整问题后会自动生成回答"}</span></div>
+            <div className="session-actions"><div className="button-row">{sessionActive ? <><button className="danger" onClick={() => void stopSession()}>结束会话</button><button onClick={() => void toggleSessionPause()}>{sessionPaused ? "继续" : "暂停"}</button></> : <><button className="primary" onClick={() => startTest()}>启动测试</button><label className="test-mode"><span>测试内容</span><select value={testMode} onChange={(event) => setTestMode(event.target.value as TestMode)}><option value="all">全部启动</option><option value="asr">语音转文字</option><option value="answer">问题回答</option></select></label></>}{sessionActive && sessionMode !== "answer" && <button className="primary submit-button" disabled={sessionPaused} onClick={() => autoStatus === "confirmed" ? cancelAutoSubmit() : void submitQuestion()}>{autoStatus === "confirmed" ? "取消自动回答" : "提交当前问题"}</button>}</div><span className="action-hint">{sessionPaused ? "当前会话已暂停，点击“继续”后恢复" : autoStatus === "waiting" ? "已识别到疑似问题，正在等待面试官补充" : autoStatus === "confirmed" ? "问题已确认，将自动生成回答；点击按钮可取消" : settings.autoInterview.mode === "off" ? (!settings.shortcutEnabled ? "快捷键已关闭，可使用按钮提交当前问题" : testMode === "asr" || testMode === "all" ? `听到问题后按 ${settings.shortcut} 提交` : "可直接输入问题并提交") : "自动模式已开启，识别到完整问题后会自动生成回答"}</span></div>
           <div className="field-heading"><label>实时增量转写</label><span className={asrStatus === "listening" ? "live-dot" : ""}>{asrStatus === "listening" ? "正在接收" : "等待开始"}</span></div>
           <div className="transcript scroll-region" onWheel={(event) => { if (!settings.wheelScroll.transcript) event.preventDefault(); }}>{partial || "等待系统音频…"}</div>
           <div className="field-heading"><label>转写结果 / 当前问题</label><button className="text-button" disabled={!question && !partial} onClick={clearCurrentQuestion}>清空</button></div>
