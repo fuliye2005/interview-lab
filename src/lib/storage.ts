@@ -1,6 +1,6 @@
 import { isTauri, invoke } from "@tauri-apps/api/core";
 import { sanitizeHeaderConfig, sanitizeLlmError } from "./llm";
-import type { AnswerFramework, AppSettings, AsrPreset, AsrProviderConfig, InterviewContextTurn, InterviewDraft, InterviewFocus, InterviewSession, InterviewTurn, LlmHealth, LlmProfile, LlmUsage, MaterialContext, SessionRecord } from "../types";
+import type { AnswerDetail, AnswerFramework, AppSettings, AsrPreset, AsrProviderConfig, InterviewConfigSnapshot, InterviewContextTurn, InterviewDraft, InterviewFocus, InterviewSession, InterviewTurn, LlmHealth, LlmProfile, LlmUsage, MaterialContext, ReasoningEffort, SessionRecord } from "../types";
 import { createAsrPreset, createDefaultAsrConfig, createDefaultLlmProfile } from "../types";
 
 const SETTINGS_KEY = "interview-lab.settings.v1";
@@ -385,6 +385,33 @@ function normalizeInterviewDraft(value: unknown): InterviewDraft | undefined {
   };
 }
 
+function normalizeSessionConfigSnapshot(value: unknown): InterviewConfigSnapshot | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const source = value as Partial<InterviewConfigSnapshot>;
+  const model = source.model && typeof source.model === "object" ? source.model as Partial<InterviewConfigSnapshot["model"]> : undefined;
+  if (!model) return undefined;
+  const protocol = model.protocol === "responses" || model.protocol === "chat-completions" ? model.protocol : "chat-completions";
+  const answerDetail: AnswerDetail = model.answerDetail === "concise" || model.answerDetail === "balanced" || model.answerDetail === "detailed" ? model.answerDetail : "balanced";
+  const reasoningEffort: ReasoningEffort = model.reasoningEffort === "low" || model.reasoningEffort === "medium" || model.reasoningEffort === "high" ? model.reasoningEffort : "none";
+  return {
+    capturedAt: typeof source.capturedAt === "string" && source.capturedAt.trim() ? source.capturedAt.slice(0, 80) : new Date().toISOString(),
+    contextWindow: Number.isFinite(source.contextWindow) ? Math.max(1000, Math.round(Number(source.contextWindow))) : 8000,
+    interviewFocus: isInterviewFocus(source.interviewFocus) ? source.interviewFocus : "technical-business",
+    answerFramework: isAnswerFramework(source.answerFramework) ? source.answerFramework : "balanced",
+    model: {
+      id: typeof model.id === "string" ? model.id.slice(0, 120) : "",
+      name: typeof model.name === "string" ? model.name.slice(0, 200) : "未命名模型",
+      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl.slice(0, 2000) : "",
+      model: typeof model.model === "string" ? model.model.slice(0, 300) : "",
+      protocol,
+      requestPath: typeof model.requestPath === "string" ? model.requestPath.slice(0, 500) : undefined,
+      contextWindow: Number.isFinite(model.contextWindow) ? Math.max(1000, Math.round(Number(model.contextWindow))) : 8000,
+      answerDetail,
+      reasoningEffort,
+    },
+  };
+}
+
 function normalizeHistory(value: unknown): InterviewSession[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => {
@@ -407,6 +434,7 @@ function normalizeHistory(value: unknown): InterviewSession[] {
         stageSummaryEdited: Boolean(item.stageSummaryEdited || (stageSummary.trim() && stageSummary !== generatedSummary)),
         lastContextTurnCount: Number.isFinite(item.lastContextTurnCount) ? Math.max(0, Number(item.lastContextTurnCount)) : 0,
         lastOmittedTurnCount: Number.isFinite(item.lastOmittedTurnCount) ? Math.max(0, Number(item.lastOmittedTurnCount)) : 0,
+        configSnapshot: normalizeSessionConfigSnapshot(item.configSnapshot),
         draft: normalizeInterviewDraft(item.draft),
         turns,
       };
@@ -429,6 +457,7 @@ function normalizeHistory(value: unknown): InterviewSession[] {
       stageSummaryEdited: false,
       lastContextTurnCount: 0,
       lastOmittedTurnCount: 0,
+      configSnapshot: undefined,
       turns: [normalizedRecord],
     };
   }).filter((item) => Boolean(item.id && item.createdAt));

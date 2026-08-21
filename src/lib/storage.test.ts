@@ -93,6 +93,21 @@ describe("loadHistory", () => {
 
     expect(session?.draft).toMatchObject({ active: true, sessionMode: "answer", question: "请继续这个问题", turns: [{ id: "turn-1" }], contextStats: { sent: 1 } });
   });
+
+  it("keeps a non-secret model and context snapshot on a session", () => {
+    setStoredHistory([{ id: "session-snapshot", title: "配置快照", createdAt: "2026-08-19T08:00:00.000Z", updatedAt: "2026-08-19T08:02:00.000Z", asrName: "ASR", llmName: "LLM", carriedTurnCount: 0, turns: [], configSnapshot: {
+      capturedAt: "2026-08-19T08:00:00.000Z",
+      contextWindow: 32768,
+      interviewFocus: "customer-solution",
+      answerFramework: "star",
+      model: { id: "profile-1", name: "模型快照", baseUrl: "https://example.invalid/v1", model: "model-x", protocol: "chat-completions", contextWindow: 32768, answerDetail: "detailed", reasoningEffort: "low", apiKey: "must-not-persist" },
+    } }]);
+
+    const snapshot = loadHistory()[0]?.configSnapshot;
+
+    expect(snapshot).toMatchObject({ contextWindow: 32768, interviewFocus: "customer-solution", answerFramework: "star", model: { name: "模型快照", model: "model-x" } });
+    expect(JSON.stringify(snapshot)).not.toContain("must-not-persist");
+  });
 });
 
 describe("loadSettings", () => {

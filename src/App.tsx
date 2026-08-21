@@ -18,7 +18,7 @@ import { formatShortcut, shortcutKeyToken, toGlobalShortcut } from "./lib/shortc
 import { clearHistory, createSafeDataBundle, defaultSettings, emptyMaterials, getStorageDiagnostics, initializeStorage, loadHistory, loadMaterials, loadSettings, markCleanShutdown, mergeStoredHeaderConfig, parseSafeDataBundle, restoreLatestBackup, saveHistory, saveMaterials, saveSettings, saveSnapshot } from "./lib/storage";
 import { parseSimpleToml, serializeSimpleToml, type SimpleTomlValue } from "./lib/toml";
 import type { StorageDiagnostics } from "./lib/storage";
-import type { AnswerFramework, AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, AutoInterviewMode, AutoInterviewStatus, InterviewContextTurn, InterviewDraft, InterviewFocus, InterviewSession, InterviewTurn, LlmHealth, LlmProfile, LlmProviderPresetId, MaterialContext, OverlayLayout, OverlaySettings, SessionRecord, WheelScrollSettings } from "./types";
+import type { AnswerFramework, AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, AutoInterviewMode, AutoInterviewStatus, InterviewConfigSnapshot, InterviewContextTurn, InterviewDraft, InterviewFocus, InterviewSession, InterviewTurn, LlmHealth, LlmProfile, LlmProviderPresetId, MaterialContext, OverlayLayout, OverlaySettings, SessionRecord, WheelScrollSettings } from "./types";
 import { ANSWER_FRAMEWORK_LABELS, createAsrPreset, createDefaultLlmProfile, INTERVIEW_FOCUS_LABELS } from "./types";
 import "./App.css";
 import "./theme.css";
@@ -360,6 +360,7 @@ function App() {
   const [sessionFrameworkOverride, setSessionFrameworkOverride] = useState<AnswerFramework | "">("");
   const [selectedHistorySessionId, setSelectedHistorySessionId] = useState<string | undefined>();
   const [historyQuery, setHistoryQuery] = useState("");
+  const [historyRegeneratingTurnId, setHistoryRegeneratingTurnId] = useState("");
   const [profileTests, setProfileTests] = useState<Record<string, ProfileTestState>>({});
   const [profileUsages, setProfileUsages] = useState<Record<string, ProfileUsageState>>({});
   const [profileModelStates, setProfileModelStates] = useState<Record<string, ProfileModelState>>({});
@@ -385,6 +386,7 @@ function App() {
   const autoPendingFingerprintRef = useRef("");
   const deferredQuestionRef = useRef("");
   const autoClassificationAbortRef = useRef<AbortController | null>(null);
+  const autoClassificationVersionRef = useRef(0);
   const autoInterviewRef = useRef(settings.autoInterview);
   const asrFailureRef = useRef<(message: string) => void>(() => {});
   const sessionPausedRef = useRef(false);
@@ -392,6 +394,7 @@ function App() {
   const overlayActionsRef = useRef<{ start: (mode: TestMode) => void; submit: () => void; cancelAuto: () => void; stop: () => void; pause: () => void; stopGeneration: () => void; regenerate: () => void }>({ start: () => {}, submit: () => {}, cancelAuto: () => {}, stop: () => {}, pause: () => {}, stopGeneration: () => {}, regenerate: () => {} });
   const closeToTrayRef = useRef(true);
   const generationAbortRef = useRef<AbortController | null>(null);
+  const historyRegenerateAbortRef = useRef<AbortController | null>(null);
   const lastQuestionRef = useRef("");
   const interviewTurnsRef = useRef<InterviewTurn[]>([]);
   const completeHistoryCountRef = useRef(0);
@@ -520,6 +523,7 @@ function App() {
     deferredQuestionRef.current = "";
     autoClassificationAbortRef.current?.abort();
     autoClassificationAbortRef.current = null;
+    autoClassificationVersionRef.current += 1;
     setAutoStatus("idle");
     setNotice("自动回答已关闭，待处理的自动判断已取消。");
   }, [settings.autoInterview.mode, settings.autoInterview.autoGenerate]);
@@ -937,6 +941,7 @@ function App() {
     deferredQuestionRef.current = "";
     autoClassificationAbortRef.current?.abort();
     autoClassificationAbortRef.current = null;
+    autoClassificationVersionRef.current += 1;
     pendingRef.current = false;
     setAutoStatus("idle");
     if (sessionActive && sessionMode !== "answer") setAsrStatus("listening");
@@ -954,6 +959,7 @@ function App() {
     deferredQuestionRef.current = "";
     autoClassificationAbortRef.current?.abort();
     autoClassificationAbortRef.current = null;
+    autoClassificationVersionRef.current += 1;
     if (desktopRuntime) void invoke("pause_system_audio_capture").catch(() => undefined);
     setAsrStatus("error");
     if (sessionActiveRef.current) {
@@ -999,6 +1005,10 @@ function App() {
     const fingerprint = normalizeQuestionFingerprint(normalized);
     if (fingerprint === autoPendingFingerprintRef.current) return;
     if (autoSubmitTimerRef.current) window.clearTimeout(autoSubmitTimerRef.current);
+    autoClassificationAbortRef.current?.abort();
+    autoClassificationAbortRef.current = null;
+    autoClassificationVersionRef.current += 1;
+    const candidateVersion = autoClassificationVersionRef.current;
     autoPendingFingerprintRef.current = fingerprint;
     autoCandidateRef.current = normalized;
     setAutoStatus("confirmed");
@@ -1008,6 +1018,7 @@ function App() {
       : `问题已确认，${Math.round(submitDelayMs / 100) / 10} 秒后自动生成，可点击取消。`);
     autoSubmitTimerRef.current = window.setTimeout(() => {
       autoSubmitTimerRef.current = undefined;
+      if (candidateVersion !== autoClassificationVersionRef.current) return;
       const current = autoCandidateRef.current;
       const currentAutoSettings = autoInterviewRef.current;
       if (!currentAutoSettings.autoGenerate || currentAutoSettings.mode === "off" || !current || !activeSessionIdRef.current || !sessionActiveRef.current || sessionPausedRef.current || generationAbortRef.current) {
@@ -1031,6 +1042,7 @@ function App() {
         } finally {
           if (autoClassificationAbortRef.current === controller) autoClassificationAbortRef.current = null;
         }
+        if (controller.signal.aborted || candidateVersion !== autoClassificationVersionRef.current) return;
         const latestAutoSettings = autoInterviewRef.current;
         if (!latestAutoSettings.autoGenerate || latestAutoSettings.mode === "off" || !activeSessionIdRef.current || !sessionActiveRef.current || sessionPausedRef.current || generationAbortRef.current) return;
         if (!confirmed.isQuestion || !confirmed.isComplete || confirmed.needsFollowup || confirmed.confidence < latestAutoSettings.confidenceThreshold) {
@@ -1045,7 +1057,28 @@ function App() {
         setAutoStatus("generating");
         void generateAnswer(current);
       })();
-    }, settings.autoInterview.submitDelayMs);
+    }, submitDelayMs);
+  }
+
+  function createInterviewConfigSnapshot(capturedAt: string): InterviewConfigSnapshot {
+    const profile = activeProfile;
+    return {
+      capturedAt,
+      contextWindow: Math.max(1000, Math.round(profile?.contextWindow || 8000)),
+      interviewFocus: settings.interviewFocus,
+      answerFramework: effectiveAnswerFramework,
+      model: {
+        id: profile?.id || "",
+        name: profile?.name || "未选择文本模型",
+        baseUrl: profile?.baseUrl || "",
+        model: profile?.model || "",
+        protocol: profile?.protocol || "chat-completions",
+        requestPath: profile?.requestPath || undefined,
+        contextWindow: Math.max(1000, Math.round(profile?.contextWindow || 8000)),
+        answerDetail: profile?.answerDetail || "balanced",
+        reasoningEffort: profile?.reasoningEffort || "none",
+      },
+    };
   }
 
   function beginInterview(draftMode: TestMode = testModeRef.current) {
@@ -1070,6 +1103,7 @@ function App() {
       stageSummaryEdited: Boolean(sourceSession?.stageSummaryEdited),
       lastContextTurnCount: carriedTurns.length,
       lastOmittedTurnCount: 0,
+      configSnapshot: createInterviewConfigSnapshot(now),
     };
     const draft: InterviewDraft = {
       active: true,
@@ -1139,9 +1173,8 @@ function App() {
       };
     }));
   }
-  function loadSessionContext(session: InterviewSession) {
+  function applyLoadedSessionContext(session: InterviewSession, context: InterviewContextTurn[], noticeText: string) {
     if (sessionActive) { setNotice("请先结束当前会话，再载入历史会话作为下一轮上下文。"); return; }
-    const context = interviewContextForSession(session.id);
     const turns = promptTurnsForContext(context);
     loadedContextRef.current = context;
     setPendingContextTurns(context);
@@ -1155,7 +1188,21 @@ function App() {
     setAnswerStatus("idle");
     setSettings((state) => ({ ...state, sessionTitleDraft: `${session.title} · 下一轮` }));
     setTab("session");
-    setNotice(`已载入 ${context.length} 轮历史问答，其中 ${turns.length} 轮将承接；点击“启动测试”后会创建下一轮面试记录。`);
+    setNotice(noticeText || `已载入 ${context.length} 轮历史问答，其中 ${turns.length} 轮将承接；点击“启动测试”后会创建下一轮面试记录。`);
+  }
+  function loadSessionContext(session: InterviewSession) {
+    const context = interviewContextForSession(session.id);
+    applyLoadedSessionContext(session, context, `已载入 ${context.length} 轮历史问答，其中 ${context.filter((turn) => turn.included).length} 轮将承接；点击“启动测试”后会创建下一轮面试记录。`);
+  }
+  function loadSessionContextFromTurn(session: InterviewSession, turnId: string) {
+    const context = interviewContextForSession(session.id);
+    const index = context.findIndex((turn) => turn.sessionId === session.id && turn.id === turnId);
+    if (index < 0) {
+      setNotice("找不到指定轮次，无法从该轮继续。");
+      return;
+    }
+    const selected = context.slice(0, index + 1);
+    applyLoadedSessionContext(session, selected, `已载入到第 ${index + 1} 轮，共 ${selected.length} 轮将承接；点击“启动测试”后会创建下一轮面试记录。`);
   }
   function renameHistorySession(sessionId: string, title: string) {
     setHistory((items) => items.map((session) => session.id === sessionId ? { ...session, title, updatedAt: new Date().toISOString() } : session));
@@ -1179,6 +1226,104 @@ function App() {
       completeHistoryCountRef.current = nextContext.length;
       setTurnCount(promptTurns.length);
       setContextStats((stats) => ({ ...stats, total: nextContext.length, sent: promptTurns.length }));
+    }
+  }
+  function deleteHistoryTurn(sessionId: string, turnId: string) {
+    if (sessionActive) {
+      setNotice("当前会话进行中，不能删除历史轮次；请先结束会话。");
+      return;
+    }
+    const session = history.find((item) => item.id === sessionId);
+    const turn = session?.turns.find((item) => item.id === turnId);
+    if (!session || !turn) return;
+    if (!window.confirm(`确定删除“${turn.question.slice(0, 40)}${turn.question.length > 40 ? "…" : ""}”这一轮吗？`)) return;
+    const nextHistory = history.map((item) => {
+      if (item.id !== sessionId) return item;
+      const turns = item.turns.filter((entry) => entry.id !== turnId);
+      return {
+        ...item,
+        turns,
+        updatedAt: new Date().toISOString(),
+        stageSummary: item.stageSummaryEdited ? item.stageSummary : makeStageSummary(turns),
+      };
+    });
+    setHistory(nextHistory);
+    if (loadedSourceSessionIdRef.current === sessionId) {
+      const context = interviewContextForSession(sessionId, nextHistory);
+      loadedContextRef.current = context;
+      setPendingContextTurns(context);
+      const promptTurns = promptTurnsForContext(context);
+      interviewTurnsRef.current = promptTurns;
+      completeHistoryCountRef.current = context.length;
+      setTurnCount(promptTurns.length);
+      setContextStats({ total: context.length, sent: promptTurns.length, omitted: 0 });
+    }
+    setNotice("已删除指定面试轮次，并同步更新承接上下文。");
+  }
+  function deleteHistorySession(sessionId: string) {
+    if (sessionActive) {
+      setNotice("当前会话进行中，不能删除历史会话；请先结束会话。");
+      return;
+    }
+    const session = history.find((item) => item.id === sessionId);
+    if (!session) return;
+    if (!window.confirm(`确定删除会话“${session.title}”及其全部记录吗？`)) return;
+    const nextHistory = history
+      .filter((item) => item.id !== sessionId)
+      .map((item) => item.sourceSessionId === sessionId ? { ...item, sourceSessionId: undefined, carriedTurnCount: 0, updatedAt: new Date().toISOString() } : item);
+    setHistory(nextHistory);
+    if (selectedHistorySessionId === sessionId) setSelectedHistorySessionId(undefined);
+    if (loadedSourceSessionIdRef.current === sessionId) {
+      loadedSourceSessionIdRef.current = undefined;
+      loadedContextRef.current = [];
+      setPendingContextTurns([]);
+      interviewTurnsRef.current = [];
+      completeHistoryCountRef.current = 0;
+      setTurnCount(0);
+      setContextStats({ total: 0, sent: 0, omitted: 0 });
+    }
+    setNotice(`已删除会话“${session.title}”。`);
+  }
+  async function regenerateHistoryTurn(sessionId: string, turnId: string) {
+    if (sessionActive) {
+      setNotice("请先结束当前会话，再重新生成历史回答。");
+      return;
+    }
+    const session = history.find((item) => item.id === sessionId);
+    const turn = session?.turns.find((item) => item.id === turnId);
+    if (!session || !turn || turn.error || !turn.question.trim() || !activeProfile) return;
+    if (!llmReady) {
+      setNotice("当前文本模型配置不完整，暂时无法重新生成历史回答。");
+      return;
+    }
+    historyRegenerateAbortRef.current?.abort();
+    const controller = new AbortController();
+    historyRegenerateAbortRef.current = controller;
+    setHistoryRegeneratingTurnId(`${sessionId}:${turnId}`);
+    let full = "";
+    try {
+      const context = interviewContextForSession(sessionId);
+      const index = context.findIndex((item) => item.sessionId === sessionId && item.id === turnId);
+      const previousTurns = index >= 0 ? promptTurnsForContext(context.slice(0, index)) : [];
+      const snapshot = session.configSnapshot;
+      const contextWindow = snapshot?.contextWindow || activeProfile.contextWindow;
+      const focus = snapshot?.interviewFocus || settings.interviewFocus;
+      const framework = snapshot?.answerFramework || settings.answerFramework;
+      await streamLlm(activeProfile, buildInterviewPrompt(turn.question, materials, previousTurns, activeProfile.answerDetail, focus, contextWindow, session.stageSummary || "", framework), (delta) => { full += delta; }, controller.signal);
+      const answerText = sanitizeAnswerText(full).trim();
+      if (!answerText) throw new Error("模型未返回可用回答");
+      const nextHistory = history.map((item) => {
+        if (item.id !== sessionId) return item;
+        const turns = item.turns.map((entry) => entry.id === turnId ? { ...entry, answer: answerText, error: undefined, llmName: activeProfile.name, createdAt: entry.createdAt } : entry);
+        return { ...item, turns, updatedAt: new Date().toISOString(), stageSummary: item.stageSummaryEdited ? item.stageSummary : makeStageSummary(turns) };
+      });
+      setHistory(nextHistory);
+      setNotice("历史回答已重新生成并保存。");
+    } catch (error) {
+      if (!controller.signal.aborted) setNotice(sanitizeLlmError(error, activeProfile.apiKey));
+    } finally {
+      if (historyRegenerateAbortRef.current === controller) historyRegenerateAbortRef.current = null;
+      setHistoryRegeneratingTurnId("");
     }
   }
   function updateHistoryContext(sessionId: string, turnId: string, patch: Pick<SessionRecord, "contextIncluded" | "pinned">) {
@@ -1302,6 +1447,7 @@ function App() {
     deferredQuestionRef.current = "";
     autoClassificationAbortRef.current?.abort();
     autoClassificationAbortRef.current = null;
+    autoClassificationVersionRef.current += 1;
     generationAbortRef.current?.abort();
     generationAbortRef.current = null;
     const wasAsrSession = sessionMode === "asr" || sessionMode === "all";
@@ -1732,12 +1878,12 @@ function App() {
         const carryableCount = contextTurns.filter((turn) => turn.included).length;
         const pinnedCount = contextTurns.filter((turn) => turn.included && turn.pinned).length;
         return <div className="history-detail">
-          <div className="panel-head history-detail-header"><div><button className="text-button history-back" onClick={() => setSelectedHistorySessionId(undefined)}>返回会话列表</button><h2>会话详情</h2><p>完整问答保留在这里；载入前可编辑、排除或固定上下文轮次。</p></div><button className="primary" disabled={sessionActive || !carryableCount} onClick={() => loadSessionContext(session)}>载入已选上下文</button></div>
+          <div className="panel-head history-detail-header"><div><button className="text-button history-back" onClick={() => setSelectedHistorySessionId(undefined)}>返回会话列表</button><h2>会话详情</h2><p>完整问答保留在这里；载入前可编辑、排除或固定上下文轮次。</p></div><div className="button-row"><button className="primary" disabled={sessionActive || !carryableCount} onClick={() => loadSessionContext(session)}>载入已选上下文</button><button className="danger" disabled={sessionActive} onClick={() => deleteHistorySession(session.id)}>删除会话</button></div></div>
           <label className="history-session-title-editor"><span>会话主题</span><input value={session.title} onChange={(event) => renameHistorySession(session.id, event.target.value)} placeholder="输入这场面试的主题" /></label>
-           <div className="history-meta"><span>创建于 {new Date(session.createdAt).toLocaleString()}</span><span>更新于 {new Date(session.updatedAt).toLocaleString()}</span><span>完整 {session.turns.length} 轮</span><span>可承接 {carryableCount} 轮</span>{session.draft?.active && <span className="history-draft-badge">未完成草稿</span>}{pinnedCount > 0 && <span>固定 {pinnedCount} 轮</span>}{session.lastContextTurnCount ? <span>上次发送 {session.lastContextTurnCount} 轮{session.lastOmittedTurnCount ? `，省略 ${session.lastOmittedTurnCount} 轮` : ""}</span> : null}{session.carriedTurnCount > 0 && <span>本场承接 {session.carriedTurnCount} 轮</span>}<span>{session.asrName} → {session.llmName}</span></div>
+           <div className="history-meta"><span>创建于 {new Date(session.createdAt).toLocaleString()}</span><span>更新于 {new Date(session.updatedAt).toLocaleString()}</span><span>完整 {session.turns.length} 轮</span><span>可承接 {carryableCount} 轮</span>{session.draft?.active && <span className="history-draft-badge">未完成草稿</span>}{pinnedCount > 0 && <span>固定 {pinnedCount} 轮</span>}{session.lastContextTurnCount ? <span>上次发送 {session.lastContextTurnCount} 轮{session.lastOmittedTurnCount ? `，省略 ${session.lastOmittedTurnCount} 轮` : ""}</span> : null}{session.carriedTurnCount > 0 && <span>本场承接 {session.carriedTurnCount} 轮</span>}<span>{session.asrName} → {session.llmName}</span>{session.configSnapshot && <span>快照：{INTERVIEW_FOCUS_LABELS[session.configSnapshot.interviewFocus]} · {formatContextWindow(session.configSnapshot.contextWindow)} · {session.configSnapshot.model.name}</span>}</div>
           <div className="history-summary-editor"><div className="history-summary-editor-head"><label>阶段摘要（可编辑）</label><button className="text-button" onClick={() => generateSessionSummary(session)}>根据本场记录生成</button></div><textarea rows={4} value={session.stageSummary || ""} onChange={(event) => updateSessionSummary(session.id, event.target.value)} placeholder="可记录这一轮面试的重点、已确认事实和待追问方向。" /></div>
           <div className="history-context-preview"><div className="history-context-preview-head"><div><strong>载入前上下文</strong><small>勾选“带入”决定下一轮发送内容；固定轮次会优先保留。</small></div><span>{carryableCount} / {contextTurns.length} 轮将承接</span></div>{contextTurns.length ? <div className="context-turn-list">{contextTurns.map((turn, index) => <div className={`context-turn-row ${turn.included ? "included" : "excluded"}`} key={`${turn.sessionId}-${turn.id}`}><span>{index + 1}</span><div><strong>{turn.question}</strong><small>{turn.answer.slice(0, 160)}{turn.answer.length > 160 ? "…" : ""}</small></div><label className="checkbox"><input type="checkbox" checked={turn.included} onChange={(event) => updateHistoryContext(turn.sessionId, turn.id, { contextIncluded: event.target.checked })} />带入</label><label className="checkbox"><input type="checkbox" checked={Boolean(turn.pinned)} disabled={!turn.included} onChange={(event) => updateHistoryContext(turn.sessionId, turn.id, { pinned: event.target.checked })} />固定</label></div>)}</div> : <p className="empty-session">没有可承接的已完成问答。</p>}</div>
-           {session.turns.length ? <div className="history-turn-list">{session.turns.map((turn) => <article className="history-turn" key={turn.id}><div className="history-turn-toolbar"><span className="history-turn-time">{new Date(turn.createdAt).toLocaleString()}</span><label className="checkbox"><input type="checkbox" checked={turn.contextIncluded !== false} disabled={Boolean(turn.error)} onChange={(event) => updateHistoryContext(session.id, turn.id, { contextIncluded: event.target.checked })} />带入上下文</label><label className="checkbox"><input type="checkbox" checked={Boolean(turn.pinned)} disabled={turn.contextIncluded === false || Boolean(turn.error)} onChange={(event) => updateHistoryContext(session.id, turn.id, { pinned: event.target.checked })} />固定</label></div><label className="history-edit-field"><span>面试问题</span><textarea rows={3} value={turn.question} onChange={(event) => updateHistoryTurn(session.id, turn.id, { question: event.target.value })} /></label>{turn.error ? <p className="error">{turn.error}</p> : <label className="history-edit-field"><span>回答</span><textarea rows={6} value={turn.answer} onChange={(event) => updateHistoryTurn(session.id, turn.id, { answer: event.target.value })} /></label>}</article>)}</div> : <p className="empty-session">本次测试尚未提交问题。</p>}
+           {session.turns.length ? <div className="history-turn-list">{session.turns.map((turn, index) => { const turnKey = `${session.id}:${turn.id}`; return <article className="history-turn" key={turn.id}><div className="history-turn-toolbar"><span className="history-turn-time">第 {index + 1} 轮 · {new Date(turn.createdAt).toLocaleString()}</span><label className="checkbox"><input type="checkbox" checked={turn.contextIncluded !== false} disabled={Boolean(turn.error)} onChange={(event) => updateHistoryContext(session.id, turn.id, { contextIncluded: event.target.checked })} />带入上下文</label><label className="checkbox"><input type="checkbox" checked={Boolean(turn.pinned)} disabled={turn.contextIncluded === false || Boolean(turn.error)} onChange={(event) => updateHistoryContext(session.id, turn.id, { pinned: event.target.checked })} />固定</label><button className="text-button" disabled={sessionActive} onClick={() => loadSessionContextFromTurn(session, turn.id)}>从此轮继续</button><button className="text-button" disabled={sessionActive || Boolean(turn.error) || historyRegeneratingTurnId === turnKey} onClick={() => void regenerateHistoryTurn(session.id, turn.id)}>{historyRegeneratingTurnId === turnKey ? "生成中…" : "重新生成"}</button><button className="text-button danger-text" disabled={sessionActive} onClick={() => deleteHistoryTurn(session.id, turn.id)}>删除</button></div><label className="history-edit-field"><span>面试问题</span><textarea rows={3} value={turn.question} onChange={(event) => updateHistoryTurn(session.id, turn.id, { question: event.target.value })} /></label>{turn.error ? <p className="error">{turn.error}</p> : <label className="history-edit-field"><span>回答</span><textarea rows={6} value={turn.answer} onChange={(event) => updateHistoryTurn(session.id, turn.id, { answer: event.target.value })} /></label>}</article>; })}</div> : <p className="empty-session">本次测试尚未提交问题。</p>}
         </div>;
       })() : <><div className="panel-head"><div><h2>面试会话记录</h2><p>每次启动测试都会创建一场面试；不保存音频。</p></div><button className="danger" onClick={() => { clearHistory(); setHistory([]); setSelectedHistorySessionId(undefined); setHistoryQuery(""); }}>清空记录</button></div><div className="history-toolbar"><label className="history-search"><span>搜索会话</span><input value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} placeholder="主题、问题、回答、模型或时间" /></label><span>{visibleHistory.length} / {history.length} 场</span>{historyQuery && <button className="text-button" onClick={() => setHistoryQuery("")}>清除搜索</button>}</div>{history.length ? visibleHistory.length ? <div className="history-list">{visibleHistory.map((session) => <button className="history-summary" key={session.id} onClick={() => setSelectedHistorySessionId(session.id)}><strong>{session.title}</strong><span>{new Date(session.updatedAt).toLocaleString()} · 完整 {session.turns.length} 轮{session.carriedTurnCount ? ` · 承接 ${session.carriedTurnCount} 轮` : ""}{session.lastContextTurnCount ? ` · 上次发送 ${session.lastContextTurnCount} 轮` : ""}</span><small>{session.asrName} → {session.llmName}{session.draft?.active ? " · 未完成草稿" : ""}</small></button>)}</div> : <p className="empty">没有匹配的会话记录。</p> : <p className="empty">还没有面试会话记录。</p>}</>}</section>}
     </section>

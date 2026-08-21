@@ -155,6 +155,26 @@ export interface InterviewDraft {
   savedAt: string;
 }
 
+export interface InterviewModelSnapshot {
+  id: string;
+  name: string;
+  baseUrl: string;
+  model: string;
+  protocol: LlmProtocol;
+  requestPath?: string;
+  contextWindow: number;
+  answerDetail: AnswerDetail;
+  reasoningEffort: ReasoningEffort;
+}
+
+export interface InterviewConfigSnapshot {
+  capturedAt: string;
+  contextWindow: number;
+  interviewFocus: InterviewFocus;
+  answerFramework: AnswerFramework;
+  model: InterviewModelSnapshot;
+}
+
 export interface InterviewSession {
   id: string;
   title: string;
@@ -170,6 +190,8 @@ export interface InterviewSession {
   stageSummaryEdited?: boolean;
   lastContextTurnCount?: number;
   lastOmittedTurnCount?: number;
+  /** Non-secret model and context settings captured when this round started. */
+  configSnapshot?: InterviewConfigSnapshot;
   draft?: InterviewDraft;
 }
 
