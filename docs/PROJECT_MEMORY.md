@@ -130,3 +130,11 @@
 - 历史会话详情支持删除会话、删除指定轮次、从指定轮次继续创建下一轮，以及使用当前文本模型重新生成历史回答；会话详情展示启动时配置快照，既有历史数据保持兼容。
 - 本地检查：`npm run build` 通过；`npx vitest run src/lib/auto-question.test.ts src/lib/storage.test.ts` 为 29 项通过；`cargo check --locked` 通过；`git diff --check` 通过。未连接、模拟或验收真实 ASR API。
 - 代码提交 `a0447d3` 已推送到 `origin/main`。`0.3.3` 单文件 EXE 已构建并复制到 `D:\Interview Lab\tauri-app-0.3.3.exe`，文件版本为 `0.3.3`，SHA-256 为 `AD32F4C9A0EA7C18EC9211E5FCF7F5CAB8FFB5CECA2D98E89BC29293E7374F24`。本次未生成安装包。
+
+## 0.4.0 UI 重构 fork（2026-09-02）
+
+- 从 `0.3.4` 稳定基线创建独立 fork：`D:\AI辅助工具\interview-lab-ui-redesign`；原项目目录保持不变。
+- 主窗口按面试工作流重构为“面试 / 资料库 / 会话 / 设置”：准备态集中主题、岗位、资料、启动检查和开始面试；进行态集中当前问题、回答和提交操作。
+- 悬浮面试台重构为面试中主界面：状态顶栏、当前问题、回答提纲/正文、单一主操作；布局、置顶、透明度、字号和点击穿透移入设置弹层。
+- 主窗口和悬浮窗分别使用 `src/ui-redesign.css` 与 `src/overlay-redesign.css`，保留原有会话、上下文、模型和 ASR 事件协议。
+- 本地验证：`npm ci`、`npm run build`、74 项 Vitest、`git diff --check` 均通过；本轮未连接、模拟或验收真实 ASR。
