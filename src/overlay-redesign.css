@@ -1,0 +1,928 @@
+/* The overlay is a focused work surface. Keep its visual contract separate from the main app. */
+.overlay-redesign {
+  --overlay-bg: #0e141b;
+  --overlay-header: #151d26;
+  --overlay-surface: #18232d;
+  --overlay-surface-strong: #1d2a35;
+  --overlay-input: #101920;
+  --overlay-border: #2a3a45;
+  --overlay-border-strong: #3b5260;
+  --overlay-text: #f0f5f2;
+  --overlay-muted: #9baab0;
+  --overlay-subtle: #71818a;
+  --overlay-accent: #65d0b1;
+  --overlay-accent-strong: #2d9f83;
+  --overlay-info: #83aef0;
+  --overlay-warning: #efc572;
+  --overlay-danger: #f09398;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--overlay-text);
+  background: var(--overlay-bg);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.overlay-redesign button,
+.overlay-redesign input,
+.overlay-redesign textarea,
+.overlay-redesign select {
+  font-family: inherit;
+}
+
+.overlay-redesign button {
+  min-height: 32px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 7px 11px;
+  color: var(--overlay-text);
+  background: var(--overlay-surface-strong);
+  box-shadow: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.2;
+  transition: border-color .16s ease, background-color .16s ease, color .16s ease, transform .16s ease;
+}
+
+.overlay-redesign button:hover:not(:disabled) {
+  border-color: var(--overlay-border-strong);
+  background: #253743;
+  transform: translateY(-1px);
+}
+
+.overlay-redesign button:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+  transform: none;
+}
+
+.overlay-redesign button:focus-visible,
+.overlay-redesign input:focus-visible,
+.overlay-redesign textarea:focus-visible,
+.overlay-redesign select:focus-visible {
+  outline: 2px solid var(--overlay-info);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px rgba(131, 174, 240, .17);
+}
+
+.overlay-redesign .overlay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 54px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--overlay-border);
+  color: var(--overlay-text);
+  background: var(--overlay-header);
+  user-select: none;
+}
+
+.overlay-redesign .overlay-title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 9px;
+}
+
+.overlay-redesign .overlay-title strong {
+  display: block;
+  color: var(--overlay-text);
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.2;
+}
+
+.overlay-redesign .overlay-title small {
+  display: block;
+  max-width: 260px;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--overlay-subtle);
+  font-size: 10px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overlay-redesign .overlay-live-dot {
+  display: block;
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #6c7a82;
+}
+
+.overlay-redesign .overlay-live-dot.active {
+  background: var(--overlay-accent);
+  box-shadow: 0 0 0 4px rgba(101, 208, 177, .14);
+}
+
+.overlay-redesign .overlay-header-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+  gap: 6px;
+}
+
+.overlay-redesign .overlay-status {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 280px;
+  gap: 7px;
+  overflow: hidden;
+  color: var(--overlay-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.overlay-redesign .overlay-status i {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #6c7a82;
+}
+
+.overlay-redesign .overlay-status.active i {
+  background: var(--overlay-accent);
+}
+
+.overlay-redesign .overlay-status strong,
+.overlay-redesign .overlay-status > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.overlay-redesign .overlay-status strong {
+  color: var(--overlay-text);
+  font-weight: 700;
+}
+
+.overlay-redesign .overlay-status > span {
+  color: var(--overlay-subtle);
+}
+
+.overlay-redesign .overlay-header-button,
+.overlay-redesign .overlay-window-actions button {
+  min-height: 30px;
+  border-color: var(--overlay-border);
+  color: var(--overlay-muted);
+  background: transparent;
+  box-shadow: none;
+}
+
+.overlay-redesign .overlay-header-button {
+  padding: 6px 8px;
+  font-size: 11px;
+}
+
+.overlay-redesign .overlay-header-button:hover:not(:disabled),
+.overlay-redesign .overlay-header-button[aria-expanded="true"] {
+  border-color: var(--overlay-border-strong);
+  color: var(--overlay-text);
+  background: var(--overlay-surface-strong);
+}
+
+.overlay-redesign .overlay-window-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.overlay-redesign .overlay-window-actions button {
+  width: 28px;
+  padding: 0;
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.overlay-redesign .overlay-window-actions button:hover:not(:disabled) {
+  color: var(--overlay-text);
+  background: var(--overlay-surface-strong);
+}
+
+.overlay-redesign .overlay-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  gap: 11px;
+  padding: 13px;
+  overflow: hidden;
+}
+
+.overlay-redesign .overlay-context-drawer {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 5px;
+  padding: 9px 10px;
+  border: 1px solid var(--overlay-border-strong);
+  border-radius: 6px;
+  color: var(--overlay-muted);
+  background: var(--overlay-surface);
+  font-size: 10px;
+}
+
+.overlay-redesign .overlay-context-drawer > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--overlay-text);
+}
+
+.overlay-redesign .overlay-context-drawer .text-button {
+  min-height: 24px;
+  padding: 4px 7px;
+  color: var(--overlay-muted);
+  font-size: 10px;
+}
+
+.overlay-redesign .overlay-start-panel {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 11px;
+  border: 1px solid var(--overlay-border);
+  border-radius: 6px;
+  background: var(--overlay-surface);
+}
+
+.overlay-redesign .overlay-start-panel > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.overlay-redesign .overlay-start-panel strong {
+  color: var(--overlay-text);
+  font-size: 12px;
+}
+
+.overlay-redesign .overlay-start-panel span {
+  color: var(--overlay-muted);
+  font-size: 10px;
+}
+
+.overlay-redesign .overlay-mode-picker {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.overlay-redesign .overlay-mode-picker button {
+  min-height: 28px;
+  padding: 5px 8px;
+  color: var(--overlay-muted);
+  background: transparent;
+  font-size: 10px;
+}
+
+.overlay-redesign .overlay-mode-picker button.selected,
+.overlay-redesign .overlay-mode-picker button[aria-checked="true"] {
+  border-color: rgba(101, 208, 177, .7);
+  color: var(--overlay-text);
+  background: rgba(45, 159, 131, .22);
+}
+
+.overlay-redesign .overlay-readiness {
+  display: inline-flex;
+  align-items: center;
+  grid-column: 1 / -1;
+  gap: 6px;
+  color: var(--overlay-subtle);
+  font-size: 10px;
+}
+
+.overlay-redesign .overlay-readiness i {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #748188;
+}
+
+.overlay-redesign .overlay-readiness i.ready {
+  background: var(--overlay-accent);
+}
+
+.overlay-redesign .overlay-readiness i.pending {
+  background: var(--overlay-warning);
+}
+
+.overlay-redesign .overlay-question-section {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  min-height: 0;
+  gap: 7px;
+}
+
+.overlay-redesign .overlay-section-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 27px;
+  color: var(--overlay-muted);
+}
+
+.overlay-redesign .overlay-section-heading > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.overlay-redesign .overlay-section-heading strong {
+  color: var(--overlay-text);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.overlay-redesign .overlay-section-heading small {
+  overflow: hidden;
+  color: var(--overlay-subtle);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overlay-redesign .overlay-kicker {
+  color: var(--overlay-accent);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .12em;
+  line-height: 1;
+}
+
+.overlay-redesign .overlay-question {
+  width: 100%;
+  height: 78px;
+  min-height: 78px;
+  max-height: 132px;
+  margin: 0;
+  padding: 10px 11px;
+  border: 1px solid var(--overlay-border);
+  border-radius: 6px;
+  color: var(--overlay-text);
+  background: var(--overlay-input);
+  font-size: 13px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.overlay-redesign .overlay-question::placeholder {
+  color: #67767f;
+}
+
+.overlay-redesign .overlay-partial {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-height: 24px;
+  padding: 4px 1px 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--overlay-subtle);
+  background: transparent;
+}
+
+.overlay-redesign .overlay-partial span {
+  flex: 0 0 auto;
+  color: var(--overlay-info);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.overlay-redesign .overlay-partial p {
+  min-width: 0;
+  min-height: 15px;
+  margin: 0;
+  overflow: hidden;
+  color: var(--overlay-muted);
+  font-size: 10px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overlay-redesign .overlay-action-area {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 5px;
+}
+
+.overlay-redesign .overlay-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.overlay-redesign .overlay-primary-action {
+  min-width: 0;
+}
+
+.overlay-redesign .overlay-primary {
+  width: 100%;
+  min-height: 38px;
+  border-color: var(--overlay-accent-strong);
+  color: #071812;
+  background: var(--overlay-accent);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.overlay-redesign .overlay-primary:hover:not(:disabled) {
+  border-color: #82e4c8;
+  color: #06140f;
+  background: #82e4c8;
+}
+
+.overlay-redesign .overlay-primary.overlay-warning {
+  border-color: #a8813e;
+  color: #241a08;
+  background: var(--overlay-warning);
+}
+
+.overlay-redesign .overlay-primary.overlay-danger {
+  border-color: #a85e67;
+  color: #2b0e12;
+  background: var(--overlay-danger);
+}
+
+.overlay-redesign .overlay-secondary-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.overlay-redesign .overlay-secondary {
+  min-height: 34px;
+  padding: 7px 9px;
+  color: var(--overlay-muted);
+  background: transparent;
+}
+
+.overlay-redesign .overlay-secondary:hover:not(:disabled) {
+  color: var(--overlay-text);
+  background: var(--overlay-surface-strong);
+}
+
+.overlay-redesign .overlay-secondary.overlay-danger-text {
+  color: var(--overlay-danger);
+}
+
+.overlay-redesign .overlay-notice {
+  min-height: 16px;
+  overflow: hidden;
+  color: var(--overlay-subtle);
+  font-size: 10px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overlay-redesign .overlay-answer-section {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 84px;
+  gap: 7px;
+}
+
+.overlay-redesign .overlay-answer-status {
+  flex: 0 0 auto;
+  color: var(--overlay-subtle);
+  font-size: 10px;
+}
+
+.overlay-redesign .overlay-answer-status.generating {
+  color: #b6a9f4;
+}
+
+.overlay-redesign .overlay-answer-status.complete {
+  color: var(--overlay-accent);
+}
+
+.overlay-redesign .overlay-answer-status.error {
+  color: var(--overlay-danger);
+}
+
+.overlay-redesign .overlay-answer-scroll {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 12px 13px;
+  border: 1px solid var(--overlay-border);
+  border-radius: 6px;
+  color: var(--overlay-text);
+  background: var(--overlay-input);
+  font-size: 13px;
+  line-height: 1.68;
+  overscroll-behavior: contain;
+  scrollbar-color: #40545e transparent;
+}
+
+.overlay-redesign .overlay-answer-scroll h3 {
+  margin: 0 0 5px;
+  color: var(--overlay-info);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .05em;
+}
+
+.overlay-redesign .overlay-answer-scroll p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.overlay-redesign .overlay-answer-outline {
+  margin-bottom: 13px;
+  padding: 0 0 12px 11px;
+  border-left: 2px solid var(--overlay-accent);
+}
+
+.overlay-redesign .overlay-answer-outline p {
+  color: #d5e3dc;
+  font-weight: 650;
+}
+
+.overlay-redesign .overlay-answer-response p {
+  color: var(--overlay-text);
+}
+
+.overlay-redesign .overlay-answer-empty {
+  display: grid;
+  place-content: center;
+  min-height: 100%;
+  gap: 4px;
+  color: var(--overlay-subtle);
+  text-align: center;
+}
+
+.overlay-redesign .overlay-answer-empty strong {
+  color: var(--overlay-muted);
+  font-size: 12px;
+}
+
+.overlay-redesign .overlay-answer-empty span {
+  font-size: 10px;
+}
+
+.overlay-redesign .overlay-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 15px;
+  color: var(--overlay-subtle);
+  font-size: 10px;
+}
+
+.overlay-redesign .overlay-footer span:last-child {
+  color: var(--overlay-muted);
+}
+
+.overlay-redesign .overlay-modal-layer {
+  position: fixed;
+  z-index: 10;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 15px;
+  background: rgba(7, 11, 15, .7);
+}
+
+.overlay-redesign .overlay-settings-dialog {
+  display: grid;
+  width: min(100%, 520px);
+  max-height: calc(100vh - 30px);
+  gap: 15px;
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid var(--overlay-border-strong);
+  border-radius: 8px;
+  color: var(--overlay-text);
+  background: #19252e;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .38);
+}
+
+.overlay-redesign .overlay-settings-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.overlay-redesign .overlay-settings-dialog-head > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.overlay-redesign .overlay-settings-dialog h2 {
+  margin: 0;
+  color: var(--overlay-text);
+  font-size: 17px;
+  line-height: 1.2;
+}
+
+.overlay-redesign .overlay-settings-dialog p {
+  margin: 0;
+  color: var(--overlay-muted);
+  font-size: 11px;
+}
+
+.overlay-redesign .overlay-dialog-close {
+  flex: 0 0 auto;
+  color: var(--overlay-muted);
+  background: transparent;
+}
+
+.overlay-redesign .overlay-dialog-close:hover:not(:disabled) {
+  color: var(--overlay-text);
+  background: var(--overlay-surface-strong);
+}
+
+.overlay-redesign .overlay-settings-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.overlay-redesign .overlay-settings-fieldset legend {
+  margin-bottom: 8px;
+  color: var(--overlay-muted);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.overlay-redesign .overlay-layout-picker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.overlay-redesign .overlay-layout-picker button {
+  display: grid;
+  min-height: 58px;
+  gap: 4px;
+  padding: 9px 10px;
+  border-color: var(--overlay-border);
+  color: var(--overlay-muted);
+  background: var(--overlay-input);
+  text-align: left;
+}
+
+.overlay-redesign .overlay-layout-picker button strong {
+  color: var(--overlay-text);
+  font-size: 12px;
+}
+
+.overlay-redesign .overlay-layout-picker button span {
+  color: var(--overlay-subtle);
+  font-size: 10px;
+  font-weight: 450;
+  line-height: 1.35;
+}
+
+.overlay-redesign .overlay-layout-picker button.selected,
+.overlay-redesign .overlay-layout-picker button[aria-checked="true"] {
+  border-color: var(--overlay-accent-strong);
+  background: rgba(45, 159, 131, .16);
+}
+
+.overlay-redesign .overlay-layout-picker button.selected strong,
+.overlay-redesign .overlay-layout-picker button[aria-checked="true"] strong {
+  color: var(--overlay-accent);
+}
+
+.overlay-redesign .overlay-setting-range {
+  display: grid;
+  gap: 7px;
+  color: var(--overlay-muted);
+  font-size: 11px;
+}
+
+.overlay-redesign .overlay-setting-range span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.overlay-redesign .overlay-setting-range output {
+  color: var(--overlay-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.overlay-redesign .overlay-setting-range input[type="range"] {
+  width: 100%;
+  accent-color: var(--overlay-accent);
+}
+
+.overlay-redesign .overlay-settings-toggles {
+  display: grid;
+  gap: 7px;
+}
+
+.overlay-redesign .overlay-settings-toggles label {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 10px;
+  border: 1px solid var(--overlay-border);
+  border-radius: 6px;
+  color: var(--overlay-muted);
+  background: var(--overlay-input);
+  cursor: pointer;
+}
+
+.overlay-redesign .overlay-settings-toggles label:hover {
+  border-color: var(--overlay-border-strong);
+}
+
+.overlay-redesign .overlay-settings-toggles label.warning {
+  border-color: #8a6833;
+  background: rgba(137, 103, 44, .14);
+}
+
+.overlay-redesign .overlay-settings-toggles input {
+  width: auto;
+  flex: 0 0 auto;
+  margin: 2px 0 0;
+  accent-color: var(--overlay-accent);
+}
+
+.overlay-redesign .overlay-settings-toggles label > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.overlay-redesign .overlay-settings-toggles strong {
+  color: var(--overlay-text);
+  font-size: 11px;
+}
+
+.overlay-redesign .overlay-settings-toggles small {
+  color: var(--overlay-subtle);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.overlay-redesign.overlay-layout-compact .overlay-header {
+  min-height: 46px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+.overlay-redesign.overlay-layout-compact .overlay-title small,
+.overlay-redesign.overlay-layout-compact .overlay-status > span,
+.overlay-redesign.overlay-layout-compact .overlay-partial,
+.overlay-redesign.overlay-layout-compact .overlay-footer,
+.overlay-redesign.overlay-layout-compact .overlay-notice {
+  display: none;
+}
+
+.overlay-redesign.overlay-layout-compact .overlay-body {
+  gap: 7px;
+  padding: 8px 10px 9px;
+}
+
+.overlay-redesign.overlay-layout-compact .overlay-start-panel {
+  display: none;
+}
+
+.overlay-redesign.overlay-layout-compact .overlay-section-heading {
+  min-height: 20px;
+}
+
+.overlay-redesign.overlay-layout-compact .overlay-section-heading small {
+  display: none;
+}
+
+.overlay-redesign.overlay-layout-compact .overlay-question-section {
+  gap: 4px;
+}
+
+.overlay-redesign.overlay-layout-compact .overlay-question {
+  height: 48px;
+  min-height: 48px;
+  max-height: 72px;
+  padding: 7px 9px;
+  font-size: 12px;
+}
+
+.overlay-redesign.overlay-layout-compact .overlay-answer-section {
+  min-height: 45px;
+}
+
+.overlay-redesign.overlay-layout-compact .overlay-answer-section .overlay-section-heading {
+  display: none;
+}
+
+.overlay-redesign.overlay-layout-compact .overlay-answer-scroll {
+  max-height: 58px;
+  padding: 7px 9px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.overlay-redesign.overlay-layout-compact .overlay-answer-outline {
+  display: none;
+}
+
+.overlay-redesign.overlay-layout-compact .overlay-answer-response h3 {
+  display: none;
+}
+
+.overlay-redesign.overlay-layout-compact .overlay-action-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.overlay-redesign.overlay-layout-compact .overlay-primary {
+  min-height: 32px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  font-size: 11px;
+}
+
+.overlay-redesign.overlay-layout-compact .overlay-secondary {
+  min-height: 30px;
+  padding: 6px 7px;
+  font-size: 10px;
+}
+
+.overlay-redesign.overlay-layout-answer .overlay-answer-scroll {
+  padding: 15px 16px;
+  font-size: 14px;
+  line-height: 1.78;
+}
+
+.overlay-redesign.overlay-layout-answer .overlay-answer-scroll h3 {
+  font-size: 11px;
+}
+
+.overlay-redesign.overlay-layout-transcript .overlay-answer-section {
+  display: none;
+}
+
+@media (max-width: 560px) {
+  .overlay-redesign .overlay-header {
+    gap: 8px;
+  }
+
+  .overlay-redesign .overlay-title small,
+  .overlay-redesign .overlay-status > span,
+  .overlay-redesign .overlay-header-button {
+    display: none;
+  }
+
+  .overlay-redesign .overlay-start-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .overlay-redesign .overlay-mode-picker {
+    justify-content: flex-start;
+  }
+
+  .overlay-redesign .overlay-readiness {
+    grid-column: auto;
+  }
+
+  .overlay-redesign .overlay-action-row {
+    grid-template-columns: 1fr;
+  }
+
+  .overlay-redesign .overlay-secondary-actions {
+    justify-content: flex-start;
+  }
+
+  .overlay-redesign .overlay-layout-picker {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay-redesign button {
+    transition: none;
+  }
+}

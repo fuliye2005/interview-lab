@@ -22,6 +22,7 @@ import type { AnswerFramework, AnswerStatus, AppSettings, AsrPreset, AsrProvider
 import { ANSWER_FRAMEWORK_LABELS, createAsrPreset, createDefaultLlmProfile, INTERVIEW_FOCUS_LABELS } from "./types";
 import "./App.css";
 import "./theme.css";
+import "./overlay-redesign.css";
 
 type Tab = "session" | "materials" | "settings" | "history";
 type SessionMode = "idle" | "all" | "asr" | "answer";
@@ -109,6 +110,20 @@ const DEFAULT_OVERLAY_STATE: OverlayState = {
   omittedContextTurnCount: 0,
   autoMode: "assist",
   autoStatus: "idle",
+};
+
+const OVERLAY_LAYOUT_PRESETS: Record<OverlayLayout, { width: number; height: number }> = {
+  compact: { width: 560, height: 180 },
+  standard: { width: 620, height: 500 },
+  answer: { width: 760, height: 620 },
+  transcript: { width: 620, height: 360 },
+};
+
+const OVERLAY_LAYOUT_LABELS: Record<OverlayLayout, string> = {
+  compact: "紧凑条",
+  standard: "标准窗",
+  answer: "阅读窗",
+  transcript: "转写窗",
 };
 
 function splitAnswerText(raw: string) {
@@ -219,6 +234,8 @@ function Overlay() {
   const [contextOpen, setContextOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const contextToggleRef = useRef<HTMLButtonElement | null>(null);
+  const settingsCloseRef = useRef<HTMLButtonElement | null>(null);
+  const settingsTriggerRef = useRef<HTMLButtonElement | null>(null);
   const answerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -250,6 +267,19 @@ function Overlay() {
     if (!state.overlaySettings.autoFollow || !answerRef.current) return;
     answerRef.current.scrollTop = answerRef.current.scrollHeight;
   }, [state.answer, state.overlaySettings.autoFollow]);
+  useEffect(() => {
+    if (!settingsOpen) return;
+    settingsCloseRef.current?.focus();
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSettingsOpen(false);
+        window.setTimeout(() => settingsTriggerRef.current?.focus(), 0);
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [settingsOpen]);
 
   function sendCommand(command: OverlayCommand["command"]) {
     void emit<OverlayCommand>("overlay-command", { command, testMode });
@@ -263,7 +293,8 @@ function Overlay() {
     void emit("overlay-mode", { testMode: value });
   }
   function changeOverlaySettings(patch: Partial<OverlaySettings>) {
-    void emit("overlay-settings", patch);
+    const nextPatch = patch.layout ? { ...patch, size: OVERLAY_LAYOUT_PRESETS[patch.layout] } : patch;
+    void emit("overlay-settings", nextPatch);
   }
   async function copyAnswer() {
     if (!state.answer.trim()) return;
@@ -291,27 +322,22 @@ function Overlay() {
   const autoLabel = state.autoMode === "off" ? "自动回答关闭" : state.autoStatus === "confirmed" ? "即将自动回答" : state.autoStatus === "waiting" ? "等待问题完成" : state.autoStatus === "generating" ? "自动回答中" : state.autoMode === "auto" ? "全自动" : "辅助自动";
   const submitDisabled = !state.sessionActive || state.sessionPaused || state.answerStatus === "generating" || (state.sessionMode === "answer" && !questionDraft.trim());
   const regenerateDisabled = !state.sessionActive || state.sessionPaused || state.answerStatus === "generating" || !state.lastQuestion.trim() || !state.llmReady;
+  const startDisabled = testMode === "all" ? !state.llmReady || !state.asrReady : testMode === "asr" ? !state.asrReady : !state.llmReady;
+  const transcriptLabel = state.asrStatus === "listening" ? "正在聆听" : state.asrStatus === "finalizing" ? "正在整理转写" : "实时转写";
+  const answerSections = splitAnswerText(state.answer);
   const overlayStyle = { opacity: state.overlaySettings.opacity, "--overlay-font-scale": state.overlaySettings.fontScale } as CSSProperties;
 
-  return <main className={"overlay-shell overlay-layout-" + layout} style={overlayStyle}>
+  return <main className={"overlay-shell overlay-redesign overlay-layout-" + layout} style={overlayStyle}>
     <header className="overlay-header" data-tauri-drag-region>
       <div className="overlay-title" data-tauri-drag-region><span className={state.sessionActive ? "overlay-live-dot active" : "overlay-live-dot"} /><div data-tauri-drag-region><strong>悬浮面试台</strong><small>{state.sessionTitle || "未开始会话"} · {state.turnCount} 轮上下文</small></div></div>
-      <div className="overlay-window-actions"><button type="button" aria-label="隐藏悬浮窗" title="隐藏悬浮窗" onClick={() => void hideWindow()}>—</button><button type="button" aria-label="关闭悬浮窗" title="关闭悬浮窗" onClick={() => void closeWindow()}>×</button></div>
+      <div className="overlay-header-tools">
+        <span className={"overlay-status " + (state.sessionActive ? "active" : "")} role="status" aria-live="polite" aria-atomic="true"><i aria-hidden="true" /><strong>{state.statusLabel}</strong><span>{modeLabel} · {autoLabel}</span></span>
+        <button ref={settingsTriggerRef} type="button" className="overlay-header-button" aria-label="显示或隐藏悬浮窗设置" aria-expanded={settingsOpen} aria-controls="overlay-settings-dialog" title="打开悬浮窗设置" onClick={() => setSettingsOpen((open) => !open)}>设置</button>
+        <button ref={contextToggleRef} type="button" className="overlay-header-button" aria-label="显示或隐藏本次上下文" aria-expanded={contextOpen} aria-controls="overlay-context-drawer" title="打开本次上下文" onClick={() => setContextOpen((open) => !open)}>上下文</button>
+        <div className="overlay-window-actions"><button type="button" aria-label="隐藏悬浮窗" title="隐藏悬浮窗" onClick={() => void hideWindow()}>—</button><button type="button" aria-label="关闭悬浮窗" title="关闭悬浮窗" onClick={() => void closeWindow()}>×</button></div>
+      </div>
     </header>
     <section className="overlay-body">
-      <div className="overlay-toolbar">
-        <label><span>测试内容</span><select value={testMode} onChange={(event) => changeMode(event.target.value as TestMode)} disabled={state.sessionActive}><option value="all">全部启动</option><option value="asr">语音转文字</option><option value="answer">问题回答</option></select></label>
-        <span className={"overlay-status " + (state.sessionActive ? "active" : "")} role="status" aria-live="polite" aria-atomic="true"><i aria-hidden="true" />{state.statusLabel} · {modeLabel} · {autoLabel}</span>
-        <button type="button" className="overlay-icon-button" aria-label={state.overlaySettings.alwaysOnTop ? "取消悬浮窗置顶" : "置顶悬浮窗"} aria-pressed={state.overlaySettings.alwaysOnTop} title={state.overlaySettings.alwaysOnTop ? "取消置顶" : "置顶悬浮窗"} onClick={() => changeOverlaySettings({ alwaysOnTop: !state.overlaySettings.alwaysOnTop })}>{state.overlaySettings.alwaysOnTop ? "置顶" : "普通"}</button>
-        <button type="button" className="overlay-icon-button" aria-label="显示或隐藏悬浮窗设置" aria-expanded={settingsOpen} aria-controls="overlay-settings-strip" title="显示悬浮窗设置" onClick={() => setSettingsOpen((open) => !open)}>设置</button>
-        <button ref={contextToggleRef} type="button" className="overlay-icon-button" aria-label="显示或隐藏本次上下文" aria-expanded={contextOpen} aria-controls="overlay-context-drawer" title="打开上下文抽屉" onClick={() => setContextOpen((open) => !open)}>上下文</button>
-      </div>
-      <div id="overlay-settings-strip" className="overlay-settings-strip" role="region" aria-label="悬浮窗设置" hidden={!settingsOpen}>
-        <label><span>布局</span><select value={layout} onChange={(event) => changeOverlaySettings({ layout: event.target.value as OverlayLayout })}><option value="compact">紧凑</option><option value="standard">标准</option><option value="answer">只回答</option><option value="transcript">只转写</option></select></label>
-        <label className="overlay-range"><span>透明度</span><input type="range" min="0.55" max="1" step="0.01" value={state.overlaySettings.opacity} onChange={(event) => changeOverlaySettings({ opacity: Number(event.target.value) })} /></label>
-        <label className="overlay-range"><span>字号</span><input type="range" min="0.8" max="1.35" step="0.05" value={state.overlaySettings.fontScale} onChange={(event) => changeOverlaySettings({ fontScale: Number(event.target.value) })} /></label>
-        <button type="button" className={"overlay-toggle " + (state.overlaySettings.clickThrough ? "active" : "")} aria-label={state.overlaySettings.clickThrough ? "关闭点击穿透" : "开启点击穿透"} aria-pressed={state.overlaySettings.clickThrough} title={state.overlaySettings.clickThrough ? "点击穿透中，可用快捷键恢复交互" : "开启点击穿透"} onClick={() => changeOverlaySettings({ clickThrough: !state.overlaySettings.clickThrough })}>{state.overlaySettings.clickThrough ? "穿透中" : "可交互"}</button>
-      </div>
       <aside id="overlay-context-drawer" className="overlay-context-drawer" role="region" aria-label="本次上下文" hidden={!contextOpen}>
         <div><strong>本次上下文</strong><button type="button" className="text-button" aria-label="收起本次上下文" onClick={() => { setContextOpen(false); contextToggleRef.current?.focus(); }}>收起</button></div>
         <span>岗位方向：{state.interviewFocus || "未设置"}</span>
@@ -320,13 +346,44 @@ function Overlay() {
         <span>当前轮数：{state.turnCount} · 承接 {state.carriedTurnCount} 轮</span>
         {state.sourceTitle && <span>来源会话：{state.sourceTitle}</span>}
       </aside>
-      <div className="overlay-actions">{state.sessionActive ? <><button type="button" className="danger" onClick={() => sendCommand("stop")}>结束会话</button><button type="button" onClick={() => sendCommand("pause")}>{state.sessionPaused ? "继续" : "暂停"}</button>{state.autoStatus === "confirmed" ? <button type="button" onClick={() => sendCommand("cancel-auto")}>取消自动回答</button> : state.answerStatus === "generating" ? <button type="button" className="danger" onClick={() => sendCommand("stop-generation")}>停止生成</button> : <><button type="button" className="primary" disabled={submitDisabled} onClick={() => sendCommand("submit")}>提交当前问题</button><button type="button" disabled={regenerateDisabled} onClick={() => sendCommand("regenerate")}>重新生成</button></>}</> : <button type="button" className="primary" disabled={testMode === "all" ? !state.llmReady || !state.asrReady : testMode === "asr" ? !state.asrReady : !state.llmReady} onClick={() => sendCommand("start")}>启动测试</button>}<span role="status" aria-live="polite" aria-atomic="true">{copyNotice || state.notice}</span></div>
-      <div className="overlay-field-heading"><strong id="overlay-question-heading">当前问题</strong><small>{state.sessionMode === "answer" ? "可直接输入并提交" : "可编辑转写文本"}</small></div>
-      <textarea className="overlay-question" aria-labelledby="overlay-question-heading" value={questionDraft} onChange={(event) => changeQuestion(event.target.value)} placeholder="输入或等待当前面试问题…" />
-      {showTranscript && <div className="overlay-transcript-block"><div className="overlay-partial" role="region" aria-label="实时增量转写" aria-live="off" aria-busy={state.asrStatus === "listening"} onWheel={(event) => { if (!state.wheelScroll.transcript) event.preventDefault(); }}><span>实时增量转写</span><p>{state.partial || "等待系统音频…"}</p></div></div>}
-      {showAnswer && <><div className="overlay-answer-head"><strong>回答</strong><span id="overlay-answer-status" className={"overlay-answer-status " + state.answerStatus} role="status" aria-live="polite" aria-atomic="true">{answerLabel}</span></div><article ref={answerRef} className="overlay-answer" role="region" aria-label="回答内容" aria-describedby="overlay-answer-status" aria-live="off" aria-busy={state.answerStatus === "generating"} onWheel={(event) => { if (!state.wheelScroll.answer) event.preventDefault(); }}>{state.answer || "回答生成后会在这里显示。"}</article></>}
-      {!compact && <div className="overlay-footer"><button type="button" aria-label="复制回答" onClick={() => void copyAnswer()} disabled={!state.answer}>复制回答</button><span>主窗口与悬浮窗共享同一场面试上下文</span></div>}
+      {!state.sessionActive && <section className="overlay-start-panel" aria-labelledby="overlay-start-heading">
+        <div><strong id="overlay-start-heading">准备开始</strong><span>选择本次测试内容，然后在悬浮窗内完成整场面试。</span></div>
+        <div className="overlay-mode-picker" role="radiogroup" aria-label="测试内容">
+          {([["all", "全部启动"], ["asr", "语音转文字"], ["answer", "问题回答"]] as Array<[TestMode, string]>).map(([value, label]) => <button key={value} type="button" role="radio" aria-checked={testMode === value} className={testMode === value ? "selected" : ""} onClick={() => changeMode(value)}>{label}</button>)}
+        </div>
+        <span className="overlay-readiness" role="status" aria-live="polite"><i className={startDisabled ? "pending" : "ready"} aria-hidden="true" />{startDisabled ? "请先在主窗口完成所需服务配置" : "服务已就绪，可以开始"}</span>
+      </section>}
+      <section className="overlay-question-section" aria-labelledby="overlay-question-heading">
+        <div className="overlay-section-heading"><div><span className="overlay-kicker">CURRENT QUESTION</span><strong id="overlay-question-heading">当前问题</strong></div><small>{state.sessionMode === "answer" ? "可直接输入并提交" : "可编辑转写文本"}</small></div>
+        <textarea className="overlay-question" aria-labelledby="overlay-question-heading" value={questionDraft} onChange={(event) => changeQuestion(event.target.value)} placeholder="输入或等待当前面试问题…" />
+        {showTranscript && <div className="overlay-partial" role="region" aria-label="实时增量转写" aria-live="off" aria-busy={state.asrStatus === "listening"} onWheel={(event) => { if (!state.wheelScroll.transcript) event.preventDefault(); }}><span>{transcriptLabel}</span><p>{state.partial || (state.asrStatus === "listening" ? "等待语音输入…" : "等待系统音频…")}</p></div>}
+      </section>
+      <div className="overlay-action-area">
+        <div className="overlay-action-row">
+          <div className="overlay-primary-action">{!state.sessionActive ? <button type="button" className="overlay-primary" disabled={startDisabled} onClick={() => sendCommand("start")}>启动测试</button> : state.autoStatus === "confirmed" ? <button type="button" className="overlay-primary overlay-warning" onClick={() => sendCommand("cancel-auto")}>取消自动回答</button> : state.answerStatus === "generating" ? <button type="button" className="overlay-primary overlay-danger" onClick={() => sendCommand("stop-generation")}>停止生成</button> : <button type="button" className="overlay-primary" disabled={submitDisabled} onClick={() => sendCommand("submit")}>{state.sessionMode === "answer" ? "提交并生成回答" : "提交当前问题"}</button>}</div>
+          <div className="overlay-secondary-actions">{state.sessionActive && <button type="button" className="overlay-secondary" onClick={() => sendCommand("pause")}>{state.sessionPaused ? "继续" : "暂停"}</button>}{state.sessionActive && state.autoStatus !== "confirmed" && state.answerStatus !== "generating" && <button type="button" className="overlay-secondary" disabled={regenerateDisabled} onClick={() => sendCommand("regenerate")}>重新生成</button>}{state.sessionActive && <button type="button" className="overlay-secondary overlay-danger-text" onClick={() => sendCommand("stop")}>结束</button>}{state.answer && <button type="button" className="overlay-secondary" aria-label="复制回答" onClick={() => void copyAnswer()}>复制</button>}</div>
+        </div>
+        <div className="overlay-notice" role="status" aria-live="polite" aria-atomic="true">{copyNotice || state.notice}</div>
+      </div>
+      {showAnswer && <section className="overlay-answer-section" aria-labelledby="overlay-answer-heading">
+        <div className="overlay-section-heading"><div><span className="overlay-kicker">ANSWER</span><strong id="overlay-answer-heading">回答提纲与正文</strong></div><span id="overlay-answer-status" className={"overlay-answer-status " + state.answerStatus} role="status" aria-live="polite" aria-atomic="true">{answerLabel}</span></div>
+        <article ref={answerRef} className="overlay-answer-scroll" role="region" aria-label="回答内容" aria-describedby="overlay-answer-status" aria-live="off" aria-busy={state.answerStatus === "generating"} onWheel={(event) => { if (!state.wheelScroll.answer) event.preventDefault(); }}>
+          {state.answer.trim() ? <>{answerSections.outline && <section className="overlay-answer-outline"><h3>回答提纲</h3><p>{answerSections.outline}</p></section>}<section className="overlay-answer-response"><h3>参考回答</h3><p>{answerSections.response}</p></section></> : <div className="overlay-answer-empty"><strong>等待回答</strong><span>提交问题后，这里会显示要点和第一人称参考回答。</span></div>}
+        </article>
+      </section>}
+      {!compact && <div className="overlay-footer"><span>主窗口与悬浮窗共享同一场面试上下文</span><span>{OVERLAY_LAYOUT_LABELS[layout]}</span></div>}
     </section>
+    {settingsOpen && <div className="overlay-modal-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) { setSettingsOpen(false); window.setTimeout(() => settingsTriggerRef.current?.focus(), 0); } }}>
+      <section id="overlay-settings-dialog" className="overlay-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="overlay-settings-heading" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="overlay-settings-dialog-head"><div><span className="overlay-kicker">OVERLAY SETTINGS</span><h2 id="overlay-settings-heading">悬浮窗设置</h2><p>调整阅读方式和窗口行为，设置会自动记忆。</p></div><button ref={settingsCloseRef} type="button" className="overlay-dialog-close" aria-label="关闭悬浮窗设置" onClick={() => { setSettingsOpen(false); window.setTimeout(() => settingsTriggerRef.current?.focus(), 0); }}>关闭</button></div>
+        <fieldset className="overlay-settings-fieldset"><legend>窗口布局</legend><div className="overlay-layout-picker" role="radiogroup" aria-label="窗口布局">
+          {(["compact", "standard", "answer", "transcript"] as OverlayLayout[]).map((value) => <button key={value} type="button" role="radio" aria-checked={layout === value} className={layout === value ? "selected" : ""} onClick={() => changeOverlaySettings({ layout: value })}><strong>{OVERLAY_LAYOUT_LABELS[value]}</strong><span>{value === "compact" ? "只保留状态、问题和主操作" : value === "standard" ? "问题与回答并列可读" : value === "answer" ? "放大回答，适合持续阅读" : "专注实时转写"}</span></button>)}
+        </div></fieldset>
+        <label className="overlay-setting-range"><span>透明度 <output>{Math.round(state.overlaySettings.opacity * 100)}%</output></span><input type="range" min="0.55" max="1" step="0.01" value={state.overlaySettings.opacity} onChange={(event) => changeOverlaySettings({ opacity: Number(event.target.value) })} /></label>
+        <label className="overlay-setting-range"><span>字号 <output>{Math.round(state.overlaySettings.fontScale * 100)}%</output></span><input type="range" min="0.8" max="1.35" step="0.05" value={state.overlaySettings.fontScale} onChange={(event) => changeOverlaySettings({ fontScale: Number(event.target.value) })} /></label>
+        <div className="overlay-settings-toggles"><label><input type="checkbox" checked={state.overlaySettings.alwaysOnTop} onChange={(event) => changeOverlaySettings({ alwaysOnTop: event.target.checked })} /><span><strong>保持置顶</strong><small>悬浮窗显示在其他窗口上方</small></span></label><label><input type="checkbox" checked={state.overlaySettings.autoFollow} onChange={(event) => changeOverlaySettings({ autoFollow: event.target.checked })} /><span><strong>回答自动跟随</strong><small>生成新内容时滚动到回答底部</small></span></label><label className={state.overlaySettings.clickThrough ? "warning" : ""}><input type="checkbox" checked={state.overlaySettings.clickThrough} onChange={(event) => changeOverlaySettings({ clickThrough: event.target.checked })} /><span><strong>点击穿透</strong><small>{state.overlaySettings.clickThrough ? "已开启，请用快捷键恢复交互" : "开启后鼠标操作会穿过悬浮窗"}</small></span></label></div>
+      </section>
+    </div>}
   </main>;
 }
 function App() {
@@ -1644,7 +1701,7 @@ function App() {
       height: size.height,
       ...(settings.overlay.position ? { x: settings.overlay.position.x, y: settings.overlay.position.y } : {}),
       minWidth: 360,
-      minHeight: 280,
+      minHeight: 160,
       alwaysOnTop: settings.overlay.alwaysOnTop,
       decorations: false,
       resizable: true,
