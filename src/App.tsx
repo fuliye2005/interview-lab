@@ -195,17 +195,17 @@ function SessionProgress({ stage, mode }: { stage: SessionStage; mode: SessionMo
   const stageIndex = answerOnly
     ? stage === "answering" || stage === "complete" ? 1 : 0
     : stage === "idle" ? 0 : stage === "listening" ? 1 : stage === "finalizing" ? 2 : asrOnly ? 2 : 3;
-  return <div className="session-progress" aria-label="会话进度">
-    {steps.map((label, index) => <div className={index < stageIndex ? "progress-step done" : index === stageIndex ? "progress-step active" : "progress-step"} key={label}>
-      <span>{index < stageIndex ? "✓" : index + 1}</span><strong>{label}</strong>
+  return <div className="session-progress" role="list" aria-label="会话进度">
+    {steps.map((label, index) => <div className={index < stageIndex ? "progress-step done" : index === stageIndex ? "progress-step active" : "progress-step"} role="listitem" aria-current={index === stageIndex ? "step" : undefined} key={label}>
+      <span aria-hidden="true">{index < stageIndex ? "✓" : index + 1}</span><strong>{label}{index === stageIndex ? "，当前阶段" : index < stageIndex ? "，已完成" : "，未开始"}</strong>
     </div>)}
   </div>;
 }
 
-function AnswerView({ answer, wheelEnabled }: { answer: string; wheelEnabled: boolean }) {
-  if (!answer) return <div className="answer-empty"><strong>等待问题</strong><span>回答生成后会在这里显示要点和第一人称参考回答。</span></div>;
+function AnswerView({ answer, wheelEnabled, busy }: { answer: string; wheelEnabled: boolean; busy: boolean }) {
+  if (!answer) return <div className="answer-empty" role="region" aria-label="回答内容" aria-live="off" aria-busy={busy}><strong>等待问题</strong><span>回答生成后会在这里显示要点和第一人称参考回答。</span></div>;
   const sections = splitAnswerText(answer);
-  return <div className="answer-content" onWheel={(event) => { if (!wheelEnabled) event.preventDefault(); }}>
+  return <div className="answer-content" role="region" aria-label="回答内容" aria-live="off" aria-busy={busy} onWheel={(event) => { if (!wheelEnabled) event.preventDefault(); }}>
     {sections.outline && <section className="answer-section outline"><h3>回答要点</h3><p>{sections.outline}</p></section>}
     <section className="answer-section"><h3>参考回答</h3><p>{sections.response}</p></section>
   </div>;
@@ -217,6 +217,8 @@ function Overlay() {
   const [testMode, setTestMode] = useState<TestMode>("all");
   const [copyNotice, setCopyNotice] = useState("");
   const [contextOpen, setContextOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const contextToggleRef = useRef<HTMLButtonElement | null>(null);
   const answerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -288,41 +290,42 @@ function Overlay() {
   const answerLabel = state.answerStatus === "generating" ? "正在生成" : state.answerStatus === "complete" ? "回答完成" : state.answerStatus === "error" ? "生成失败" : "等待回答";
   const autoLabel = state.autoMode === "off" ? "自动回答关闭" : state.autoStatus === "confirmed" ? "即将自动回答" : state.autoStatus === "waiting" ? "等待问题完成" : state.autoStatus === "generating" ? "自动回答中" : state.autoMode === "auto" ? "全自动" : "辅助自动";
   const submitDisabled = !state.sessionActive || state.sessionPaused || state.answerStatus === "generating" || (state.sessionMode === "answer" && !questionDraft.trim());
-  const regenerateDisabled = !state.sessionActive || state.answerStatus === "generating" || !state.lastQuestion.trim() || !state.llmReady;
+  const regenerateDisabled = !state.sessionActive || state.sessionPaused || state.answerStatus === "generating" || !state.lastQuestion.trim() || !state.llmReady;
   const overlayStyle = { opacity: state.overlaySettings.opacity, "--overlay-font-scale": state.overlaySettings.fontScale } as CSSProperties;
 
   return <main className={"overlay-shell overlay-layout-" + layout} style={overlayStyle}>
     <header className="overlay-header" data-tauri-drag-region>
       <div className="overlay-title" data-tauri-drag-region><span className={state.sessionActive ? "overlay-live-dot active" : "overlay-live-dot"} /><div data-tauri-drag-region><strong>悬浮面试台</strong><small>{state.sessionTitle || "未开始会话"} · {state.turnCount} 轮上下文</small></div></div>
-      <div className="overlay-window-actions"><button title="隐藏悬浮窗" onClick={() => void hideWindow()}>—</button><button title="关闭悬浮窗" onClick={() => void closeWindow()}>×</button></div>
+      <div className="overlay-window-actions"><button type="button" aria-label="隐藏悬浮窗" title="隐藏悬浮窗" onClick={() => void hideWindow()}>—</button><button type="button" aria-label="关闭悬浮窗" title="关闭悬浮窗" onClick={() => void closeWindow()}>×</button></div>
     </header>
     <section className="overlay-body">
       <div className="overlay-toolbar">
         <label><span>测试内容</span><select value={testMode} onChange={(event) => changeMode(event.target.value as TestMode)} disabled={state.sessionActive}><option value="all">全部启动</option><option value="asr">语音转文字</option><option value="answer">问题回答</option></select></label>
-        <span className={"overlay-status " + (state.sessionActive ? "active" : "")}><i />{state.statusLabel} · {modeLabel} · {autoLabel}</span>
-        <button className="overlay-icon-button" title={state.overlaySettings.alwaysOnTop ? "取消置顶" : "置顶悬浮窗"} onClick={() => changeOverlaySettings({ alwaysOnTop: !state.overlaySettings.alwaysOnTop })}>{state.overlaySettings.alwaysOnTop ? "置顶" : "普通"}</button>
-        <button className="overlay-icon-button" title="打开上下文抽屉" onClick={() => setContextOpen((open) => !open)}>上下文</button>
+        <span className={"overlay-status " + (state.sessionActive ? "active" : "")} role="status" aria-live="polite" aria-atomic="true"><i aria-hidden="true" />{state.statusLabel} · {modeLabel} · {autoLabel}</span>
+        <button type="button" className="overlay-icon-button" aria-label={state.overlaySettings.alwaysOnTop ? "取消悬浮窗置顶" : "置顶悬浮窗"} aria-pressed={state.overlaySettings.alwaysOnTop} title={state.overlaySettings.alwaysOnTop ? "取消置顶" : "置顶悬浮窗"} onClick={() => changeOverlaySettings({ alwaysOnTop: !state.overlaySettings.alwaysOnTop })}>{state.overlaySettings.alwaysOnTop ? "置顶" : "普通"}</button>
+        <button type="button" className="overlay-icon-button" aria-label="显示或隐藏悬浮窗设置" aria-expanded={settingsOpen} aria-controls="overlay-settings-strip" title="显示悬浮窗设置" onClick={() => setSettingsOpen((open) => !open)}>设置</button>
+        <button ref={contextToggleRef} type="button" className="overlay-icon-button" aria-label="显示或隐藏本次上下文" aria-expanded={contextOpen} aria-controls="overlay-context-drawer" title="打开上下文抽屉" onClick={() => setContextOpen((open) => !open)}>上下文</button>
       </div>
-      <div className="overlay-settings-strip">
+      <div id="overlay-settings-strip" className="overlay-settings-strip" role="region" aria-label="悬浮窗设置" hidden={!settingsOpen}>
         <label><span>布局</span><select value={layout} onChange={(event) => changeOverlaySettings({ layout: event.target.value as OverlayLayout })}><option value="compact">紧凑</option><option value="standard">标准</option><option value="answer">只回答</option><option value="transcript">只转写</option></select></label>
         <label className="overlay-range"><span>透明度</span><input type="range" min="0.55" max="1" step="0.01" value={state.overlaySettings.opacity} onChange={(event) => changeOverlaySettings({ opacity: Number(event.target.value) })} /></label>
         <label className="overlay-range"><span>字号</span><input type="range" min="0.8" max="1.35" step="0.05" value={state.overlaySettings.fontScale} onChange={(event) => changeOverlaySettings({ fontScale: Number(event.target.value) })} /></label>
-        <button className={"overlay-toggle " + (state.overlaySettings.clickThrough ? "active" : "")} title={state.overlaySettings.clickThrough ? "点击穿透中，可用快捷键恢复交互" : "开启点击穿透"} onClick={() => changeOverlaySettings({ clickThrough: !state.overlaySettings.clickThrough })}>{state.overlaySettings.clickThrough ? "穿透中" : "可交互"}</button>
+        <button type="button" className={"overlay-toggle " + (state.overlaySettings.clickThrough ? "active" : "")} aria-label={state.overlaySettings.clickThrough ? "关闭点击穿透" : "开启点击穿透"} aria-pressed={state.overlaySettings.clickThrough} title={state.overlaySettings.clickThrough ? "点击穿透中，可用快捷键恢复交互" : "开启点击穿透"} onClick={() => changeOverlaySettings({ clickThrough: !state.overlaySettings.clickThrough })}>{state.overlaySettings.clickThrough ? "穿透中" : "可交互"}</button>
       </div>
-      {contextOpen && <aside className="overlay-context-drawer">
-        <div><strong>本次上下文</strong><button className="text-button" onClick={() => setContextOpen(false)}>收起</button></div>
+      <aside id="overlay-context-drawer" className="overlay-context-drawer" role="region" aria-label="本次上下文" hidden={!contextOpen}>
+        <div><strong>本次上下文</strong><button type="button" className="text-button" aria-label="收起本次上下文" onClick={() => { setContextOpen(false); contextToggleRef.current?.focus(); }}>收起</button></div>
         <span>岗位方向：{state.interviewFocus || "未设置"}</span>
         <span>材料状态：{state.materialsLabel}</span>
         <span>完整 {state.completeContextTurnCount} 轮 · 本次发送 {state.sentContextTurnCount} 轮{state.omittedContextTurnCount ? ` · 省略 ${state.omittedContextTurnCount} 轮` : ""}</span>
         <span>当前轮数：{state.turnCount} · 承接 {state.carriedTurnCount} 轮</span>
         {state.sourceTitle && <span>来源会话：{state.sourceTitle}</span>}
-      </aside>}
-      <div className="overlay-actions">{state.sessionActive ? <><button className="danger" onClick={() => sendCommand("stop")}>结束会话</button><button onClick={() => sendCommand("pause")}>{state.sessionPaused ? "继续" : "暂停"}</button>{state.autoStatus === "confirmed" ? <button onClick={() => sendCommand("cancel-auto")}>取消自动回答</button> : state.answerStatus === "generating" ? <button className="danger" onClick={() => sendCommand("stop-generation")}>停止生成</button> : <button className="primary" disabled={submitDisabled} onClick={() => sendCommand("submit")}>提交当前问题</button>}<button disabled={regenerateDisabled} onClick={() => sendCommand("regenerate")}>重新生成</button></> : <button className="primary" disabled={testMode === "all" ? !state.llmReady || !state.asrReady : testMode === "asr" ? !state.asrReady : !state.llmReady} onClick={() => sendCommand("start")}>启动测试</button>}<span>{copyNotice || state.notice}</span></div>
-      <div className="overlay-field-heading"><strong>当前问题</strong><small>{state.sessionMode === "answer" ? "可直接输入并提交" : "可编辑转写文本"}</small></div>
-      <textarea className="overlay-question" value={questionDraft} onChange={(event) => changeQuestion(event.target.value)} placeholder="输入或等待当前面试问题…" />
-      {showTranscript && <div className="overlay-transcript-block"><div className="overlay-partial" onWheel={(event) => { if (!state.wheelScroll.transcript) event.preventDefault(); }}><span>实时增量转写</span><p>{state.partial || "等待系统音频…"}</p></div></div>}
-      {showAnswer && <><div className="overlay-answer-head"><strong>回答</strong><span className={"overlay-answer-status " + state.answerStatus}>{answerLabel}</span></div><article ref={answerRef} className="overlay-answer" onWheel={(event) => { if (!state.wheelScroll.answer) event.preventDefault(); }}>{state.answer || "回答生成后会在这里显示。"}</article></>}
-      {!compact && <div className="overlay-footer"><button onClick={() => void copyAnswer()} disabled={!state.answer}>复制回答</button><button disabled={regenerateDisabled} onClick={() => sendCommand("regenerate")}>重新生成</button><span>主窗口与悬浮窗共享同一场面试上下文</span></div>}
+      </aside>
+      <div className="overlay-actions">{state.sessionActive ? <><button type="button" className="danger" onClick={() => sendCommand("stop")}>结束会话</button><button type="button" onClick={() => sendCommand("pause")}>{state.sessionPaused ? "继续" : "暂停"}</button>{state.autoStatus === "confirmed" ? <button type="button" onClick={() => sendCommand("cancel-auto")}>取消自动回答</button> : state.answerStatus === "generating" ? <button type="button" className="danger" onClick={() => sendCommand("stop-generation")}>停止生成</button> : <><button type="button" className="primary" disabled={submitDisabled} onClick={() => sendCommand("submit")}>提交当前问题</button><button type="button" disabled={regenerateDisabled} onClick={() => sendCommand("regenerate")}>重新生成</button></>}</> : <button type="button" className="primary" disabled={testMode === "all" ? !state.llmReady || !state.asrReady : testMode === "asr" ? !state.asrReady : !state.llmReady} onClick={() => sendCommand("start")}>启动测试</button>}<span role="status" aria-live="polite" aria-atomic="true">{copyNotice || state.notice}</span></div>
+      <div className="overlay-field-heading"><strong id="overlay-question-heading">当前问题</strong><small>{state.sessionMode === "answer" ? "可直接输入并提交" : "可编辑转写文本"}</small></div>
+      <textarea className="overlay-question" aria-labelledby="overlay-question-heading" value={questionDraft} onChange={(event) => changeQuestion(event.target.value)} placeholder="输入或等待当前面试问题…" />
+      {showTranscript && <div className="overlay-transcript-block"><div className="overlay-partial" role="region" aria-label="实时增量转写" aria-live="off" aria-busy={state.asrStatus === "listening"} onWheel={(event) => { if (!state.wheelScroll.transcript) event.preventDefault(); }}><span>实时增量转写</span><p>{state.partial || "等待系统音频…"}</p></div></div>}
+      {showAnswer && <><div className="overlay-answer-head"><strong>回答</strong><span id="overlay-answer-status" className={"overlay-answer-status " + state.answerStatus} role="status" aria-live="polite" aria-atomic="true">{answerLabel}</span></div><article ref={answerRef} className="overlay-answer" role="region" aria-label="回答内容" aria-describedby="overlay-answer-status" aria-live="off" aria-busy={state.answerStatus === "generating"} onWheel={(event) => { if (!state.wheelScroll.answer) event.preventDefault(); }}>{state.answer || "回答生成后会在这里显示。"}</article></>}
+      {!compact && <div className="overlay-footer"><button type="button" aria-label="复制回答" onClick={() => void copyAnswer()} disabled={!state.answer}>复制回答</button><span>主窗口与悬浮窗共享同一场面试上下文</span></div>}
     </section>
   </main>;
 }
@@ -1831,19 +1834,19 @@ function App() {
 
   return <main className="app-shell">
     <aside className="sidebar"><div className="brand"><span>IL</span><div><strong>Interview Lab</strong><small>实时语音测试台</small></div></div>
-      {(["session", "materials", "settings", "history"] as Tab[]).map((item) => <button key={item} className={tab === item ? "nav active" : "nav"} onClick={() => setTab(item)}>{({ session: "会话控制", materials: "候选人材料", settings: "服务配置", history: "文本记录" })[item]}</button>)}
+      <nav className="sidebar-nav" aria-label="主导航">{(["session", "materials", "settings", "history"] as Tab[]).map((item) => <button key={item} className={tab === item ? "nav active" : "nav"} aria-current={tab === item ? "page" : undefined} onClick={() => setTab(item)}>{({ session: "会话控制", materials: "候选人材料", settings: "服务配置", history: "文本记录" })[item]}</button>)}</nav>
       <p className="sidebar-footer">受控测试模式<br />不保存原始音频<br /><span className="build-stamp">v{BUILD_INFO.version} · {BUILD_INFO.commit}</span></p></aside>
-    <section className={tab === "session" ? "content session-content" : "content"}><header className="topbar"><div><p className="eyebrow">WINDOWS · REALTIME ASR · LLM</p><h1>{({ session: "会话控制", materials: "候选人材料", settings: "服务配置", history: "文本记录" })[tab]}</h1></div><span className={`status ${statusClass}`}>{statusLabel}</span></header>
-      <p className="notice">{notice}</p>
-      <div className="quick-status" aria-label="当前配置状态"><span className={llmReady ? "ready" : "pending"}><i />文本模型：{llmReady ? "已就绪" : "待配置"}</span><span className={asrReady ? "ready" : "muted"}><i />ASR：{asrReady ? "已配置" : "未配置"}</span>{tab === "materials" && <span className={materialClass}><i />材料：{materialLabel}</span>}{storageError && <span className="pending"><i />本机存储：异常</span>}<span className="autosave-state"><i />设置自动保存在本机</span></div>
+    <section className={tab === "session" ? "content session-content" : "content"}><header className="topbar"><div><p className="eyebrow">WINDOWS · REALTIME ASR · LLM</p><h1>{({ session: "会话控制", materials: "候选人材料", settings: "服务配置", history: "文本记录" })[tab]}</h1></div><span className={`status ${statusClass}`} role="status" aria-live="polite" aria-atomic="true">{statusLabel}</span></header>
+      <p className="notice" role="status" aria-live="polite" aria-atomic="true" title={notice}>{notice}</p>
+      <div className="quick-status" role="region" aria-label="当前配置状态"><span className={llmReady ? "ready" : "pending"}><i aria-hidden="true" />文本模型：{llmReady ? "已就绪" : "待配置"}</span><span className={asrReady ? "ready" : "muted"}><i aria-hidden="true" />ASR：{asrReady ? "已配置" : "未配置"}</span>{tab === "materials" && <span className={materialClass}><i aria-hidden="true" />材料：{materialLabel}</span>}{storageError && <span className="pending"><i aria-hidden="true" />本机存储：异常</span>}<span className="autosave-state"><i aria-hidden="true" />设置自动保存在本机</span></div>
       {tab === "session" && <section className="session-grid">
         <div className="panel session-panel">
           <div className="panel-head session-head"><div><div className="panel-kicker">LIVE SESSION</div><h2>系统音频会话</h2><p>默认输出设备 · PCM16 / Mono / 16kHz</p></div><span className={`session-badge ${sessionStage}`}><i />{statusLabel}</span></div>
-            <div className="session-actions"><div className="button-row">{sessionActive ? <><button className="danger" onClick={() => void stopSession()}>结束会话</button><button onClick={() => void toggleSessionPause()}>{sessionPaused ? "继续" : "暂停"}</button></> : <><button className="primary" onClick={() => startTest()}>启动测试</button><label className="test-mode"><span>测试内容</span><select value={testMode} onChange={(event) => setTestMode(event.target.value as TestMode)}><option value="all">全部启动</option><option value="asr">语音转文字</option><option value="answer">问题回答</option></select></label></>}{sessionActive && sessionMode !== "answer" && <button className="primary submit-button" disabled={sessionPaused} onClick={() => autoStatus === "confirmed" ? cancelAutoSubmit() : void submitQuestion()}>{autoStatus === "confirmed" ? "取消自动回答" : "提交当前问题"}</button>}</div><span className="action-hint">{sessionPaused ? "当前会话已暂停，点击“继续”后恢复" : autoStatus === "waiting" ? "已识别到疑似问题，正在等待面试官补充" : autoStatus === "confirmed" ? "问题已确认，将自动生成回答；点击按钮可取消" : settings.autoInterview.mode === "off" ? (!settings.shortcutEnabled ? "快捷键已关闭，可使用按钮提交当前问题" : testMode === "asr" || testMode === "all" ? `听到问题后按 ${settings.shortcut} 提交` : "可直接输入问题并提交") : "自动模式已开启，识别到完整问题后会自动生成回答"}</span></div>
-          <div className="field-heading"><label>实时增量转写</label><span className={asrStatus === "listening" ? "live-dot" : ""}>{asrStatus === "listening" ? "正在接收" : "等待开始"}</span></div>
-          <div className="transcript scroll-region" onWheel={(event) => { if (!settings.wheelScroll.transcript) event.preventDefault(); }}>{partial || "等待系统音频…"}</div>
-          <div className="field-heading"><label>转写结果 / 当前问题</label><button className="text-button" disabled={!question && !partial} onClick={clearCurrentQuestion}>清空</button></div>
-          <textarea rows={6} value={question} onChange={(event) => updateCurrentQuestion(event.target.value)} placeholder="ASR 最终文本会显示在这里，也可以直接输入问题测试模型。" />
+            <div className="session-actions"><div className="button-row">{sessionActive ? <><button className="danger" onClick={() => void stopSession()}>结束会话</button><button onClick={() => void toggleSessionPause()}>{sessionPaused ? "继续" : "暂停"}</button></> : <><button className="primary" onClick={() => startTest()}>启动测试</button><label className="test-mode"><span>测试内容</span><select value={testMode} onChange={(event) => setTestMode(event.target.value as TestMode)}><option value="all">全部启动</option><option value="asr">语音转文字</option><option value="answer">问题回答</option></select></label></>}{sessionActive && <button className="primary submit-button" disabled={sessionPaused || answerStatus === "generating" || (sessionMode === "answer" && !question.trim())} onClick={() => autoStatus === "confirmed" ? cancelAutoSubmit() : void submitQuestion()}>{autoStatus === "confirmed" ? "取消自动回答" : sessionMode === "asr" ? "提交当前转写" : "提交并生成回答"}</button>}</div><span className="action-hint">{sessionPaused ? "当前会话已暂停，点击“继续”后恢复" : autoStatus === "waiting" ? "已识别到疑似问题，正在等待面试官补充" : autoStatus === "confirmed" ? "问题已确认，将自动生成回答；点击按钮可取消" : settings.autoInterview.mode === "off" ? (!settings.shortcutEnabled ? "确认问题后点击“提交并生成回答”" : testMode === "asr" ? `听到问题后按 ${settings.shortcut} 提交当前转写` : `确认问题后按 ${settings.shortcut} 提交并生成`) : "自动模式已开启，识别到完整问题后会自动生成回答"}</span></div>
+           <div className="field-heading"><div className="field-heading-copy"><strong id="transcript-heading">实时增量转写</strong><small>只读 · 正在听到的临时内容</small></div><span id="transcript-status" className={asrStatus === "listening" ? "live-dot" : ""} role="status" aria-live="polite" aria-atomic="true">{asrStatus === "listening" ? "正在接收" : "等待开始"}</span></div>
+           <div className="transcript scroll-region" role="region" aria-labelledby="transcript-heading" aria-live="off" aria-busy={asrStatus === "listening"} onWheel={(event) => { if (!settings.wheelScroll.transcript) event.preventDefault(); }}>{partial || "等待系统音频…"}</div>
+           <div className="field-heading"><div className="field-heading-copy"><strong id="question-heading">提交给模型的问题</strong><small id="question-help">可编辑 · 确认后用于生成回答</small></div><button className="text-button" disabled={!question && !partial} onClick={clearCurrentQuestion}>清空问题</button></div>
+           <textarea className="question-input" aria-labelledby="question-heading" aria-describedby="question-help" rows={6} value={question} onChange={(event) => updateCurrentQuestion(event.target.value)} placeholder="ASR 最终文本会显示在这里，也可以直接输入问题测试模型。" />
           <div className="session-secondary-controls">
             <div className="interview-context">本次面试上下文：完整 {contextStats.total} 轮 · 本次发送 {contextStats.sent} 轮{contextStats.omitted ? ` · 超出窗口省略 ${contextStats.omitted} 轮` : ""}{sessionActive && activeSessionTitle ? ` · ${activeSessionTitle}` : ""}</div>
             {pendingContextTurns.length > 0 && !sessionActive && <div className="pending-context-strip"><span>下一轮将承接 {pendingContextTurns.filter((turn) => turn.included).length} / {pendingContextTurns.length} 轮</span><button className="text-button" onClick={() => { setSelectedHistorySessionId(loadedSourceSessionIdRef.current); setTab("history"); }}>查看并修改上下文</button></div>}
@@ -1854,9 +1857,9 @@ function App() {
           </div>
         </div>
         <div className="panel answer-panel">
-          <div className="panel-head"><div><div className="panel-kicker">AI RESPONSE</div><h2>中文回答</h2><p>{INTERVIEW_FOCUS_LABELS[settings.interviewFocus]} · {activeProfile?.answerDetail === "detailed" ? "详细" : activeProfile?.answerDetail === "concise" ? "简洁" : "标准"}</p></div><span className={`answer-status ${answerStatus}`}>{answerStatus === "generating" ? "流式生成中" : answerStatus === "complete" ? "已完成" : answerStatus === "error" ? "生成失败" : "等待问题"}</span></div>
-          <div className="answer-toolbar answer-toolbar-top"><button onClick={() => void copyAnswer()} disabled={!answer}>复制回答</button><button onClick={() => void showOverlay(answer, true)}>打开悬浮窗</button>{answerStatus === "generating" ? <button className="danger" onClick={stopGeneration}>停止生成</button> : <><button onClick={() => void regenerateAnswer()} disabled={!sessionActive || !lastQuestionRef.current || !llmReady}>重新生成</button><button className="primary" disabled={!sessionActive || !question || !llmReady} onClick={() => void generateAnswer(question)}>用当前文本生成</button></>}</div>
-          <AnswerView answer={answer} wheelEnabled={settings.wheelScroll.answer} />
+          <div className="panel-head"><div><div className="panel-kicker">AI RESPONSE</div><h2>中文回答</h2><p>{INTERVIEW_FOCUS_LABELS[settings.interviewFocus]} · {activeProfile?.answerDetail === "detailed" ? "详细" : activeProfile?.answerDetail === "concise" ? "简洁" : "标准"}</p></div><span id="answer-status" className={`answer-status ${answerStatus}`} role="status" aria-live="polite" aria-atomic="true">{answerStatus === "generating" ? "流式生成中" : answerStatus === "complete" ? "已完成" : answerStatus === "error" ? "生成失败" : "等待问题"}</span></div>
+           <div className="answer-toolbar answer-toolbar-top"><button onClick={() => void copyAnswer()} disabled={!answer}>复制回答</button><button onClick={() => void showOverlay(answer, true)}>打开悬浮窗</button>{answerStatus === "generating" ? <button className="danger" onClick={stopGeneration}>停止生成</button> : <button onClick={() => void regenerateAnswer()} disabled={!sessionActive || !lastQuestionRef.current || !llmReady}>重新生成</button>}</div>
+          <AnswerView answer={answer} wheelEnabled={settings.wheelScroll.answer} busy={answerStatus === "generating"} />
         </div>
         {settings.asr.debug && <div className="panel debug-panel"><h2>ASR 调试消息</h2><pre>{debug.join("\n\n") || "等待 WebSocket 消息…"}</pre></div>}
       </section>}
