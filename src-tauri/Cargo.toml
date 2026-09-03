@@ -1,6 +1,6 @@
 [package]
 name = "tauri-app"
-version = "0.4.2"
+version = "0.4.3"
 description = "AI 辅助面试工具，支持实时语音转写和手动文本输入。"
 authors = ["you"]
 edition = "2021"

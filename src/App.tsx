@@ -13,13 +13,13 @@ import { assessQuestion, mergeTranscript, normalizeQuestionFingerprint } from ".
 import { buildInterviewPrompt, classifyInterviewQuestion, fetchLlmUsage, listLlmModels, sanitizeAnswerText, sanitizeHeaderConfig, sanitizeLlmError, selectInterviewContext, streamLlm, testLlmConnection } from "./lib/llm";
 import { extractMaterialText, makeCandidateDraft, makeJobDraft } from "./lib/materials";
 import { applyLlmProviderPreset, LLM_PROVIDER_PRESETS, providerLabel, providerRequiresKey } from "./lib/providers";
-import { importRepository as importRepositoryMaterial } from "./lib/repository";
+import { discoverPublicRepositories, importRepository as importRepositoryMaterial, mergeRepositoryContexts, parseRepositoryUserUrl, repositoryContextsFromMaterials } from "./lib/repository";
 import { detectRuntimeEnvironment } from "./lib/runtime";
 import { formatShortcut, shortcutKeyToken, toGlobalShortcut } from "./lib/shortcut";
 import { clearHistory, createSafeDataBundle, defaultSettings, emptyMaterials, getStorageDiagnostics, initializeStorage, loadHistory, loadMaterials, loadSettings, markCleanShutdown, mergeStoredHeaderConfig, parseSafeDataBundle, restoreLatestBackup, saveHistory, saveMaterials, saveSettings, saveSnapshot } from "./lib/storage";
 import { parseSimpleToml, serializeSimpleToml, type SimpleTomlValue } from "./lib/toml";
 import type { StorageDiagnostics } from "./lib/storage";
-import type { AnswerFramework, AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, AutoInterviewMode, AutoInterviewStatus, InterviewConfigSnapshot, InterviewContextTurn, InterviewDraft, InterviewFocus, InterviewSession, InterviewTurn, LlmHealth, LlmProfile, LlmProviderPresetId, MaterialContext, OverlayLayout, OverlaySettings, RepositoryContext, SessionRecord, WheelScrollSettings } from "./types";
+import type { AnswerFramework, AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, AutoInterviewMode, AutoInterviewStatus, InterviewConfigSnapshot, InterviewContextTurn, InterviewDraft, InterviewFocus, InterviewSession, InterviewTurn, LlmHealth, LlmProfile, LlmProviderPresetId, MaterialContext, OverlayLayout, OverlaySettings, PublicRepositoryDiscovery, RepositoryContext, SessionRecord, WheelScrollSettings } from "./types";
 import { ANSWER_FRAMEWORK_LABELS, createAsrPreset, createDefaultLlmProfile, INTERVIEW_FOCUS_LABELS } from "./types";
 import "./App.css";
 import "./theme.css";
@@ -461,6 +461,10 @@ function App() {
   const [expandedProfileIds, setExpandedProfileIds] = useState<string[]>([]);
   const [repositoryUrl, setRepositoryUrl] = useState("");
   const [repositoryImporting, setRepositoryImporting] = useState(false);
+  const [repositoryDiscovery, setRepositoryDiscovery] = useState<PublicRepositoryDiscovery | null>(null);
+  const [repositorySelectedIds, setRepositorySelectedIds] = useState<string[]>([]);
+  const [repositoryDiscovering, setRepositoryDiscovering] = useState(false);
+  const [repositoryBatchImporting, setRepositoryBatchImporting] = useState(false);
   const asrRef = useRef<GenericAsrSession | undefined>(undefined);
   const pendingRef = useRef(false);
   const questionRef = useRef("");
@@ -512,8 +516,16 @@ function App() {
   }, [history, historyQuery]);
   const llmReady = Boolean(activeProfile?.baseUrl.trim() && activeProfile?.model.trim() && activeProfile && (!providerRequiresKey(activeProfile) || activeProfile.apiKey.trim()));
   const asrReady = asrConfigReady(settings.asr);
-  const hasMaterials = Boolean(materials.resume.trim() || materials.jobDescription.trim() || materials.personalNotes.trim() || materials.candidateSummary.trim() || materials.jobSummary.trim() || materials.repository?.summary.trim());
-  const overlayMaterialsLabel = materials.confirmed ? "已确认并用于回答" : hasMaterials ? "有材料，等待确认" : "未添加材料";
+  const repositoryContexts = useMemo(() => repositoryContextsFromMaterials({ repository: materials.repository, repositories: materials.repositories }), [materials.repository, materials.repositories]);
+  const confirmedRepositoryCount = repositoryContexts.filter((repository) => repository.confirmed).length;
+  const hasRepositoryMaterial = repositoryContexts.some((repository) => Boolean(repository.summary.trim()));
+  const repositoryMaterialLabel = repositoryContexts.length === 1
+    ? `含仓库：${repositoryContexts[0]?.name || "已导入项目"}`
+    : repositoryContexts.length > 1
+      ? `含仓库：${repositoryContexts.length} 个项目（${confirmedRepositoryCount} 个已确认）`
+      : "简历、JD、个人补充和项目仓库";
+  const hasMaterials = Boolean(materials.resume.trim() || materials.jobDescription.trim() || materials.personalNotes.trim() || materials.candidateSummary.trim() || materials.jobSummary.trim() || hasRepositoryMaterial);
+  const overlayMaterialsLabel = materials.confirmed || confirmedRepositoryCount > 0 ? "已确认并用于回答" : hasMaterials ? "有材料，等待确认" : "未添加材料";
   const sessionStage: SessionStage = answerStatus === "generating" ? "answering" : answerStatus === "complete" ? "complete" : !sessionActive ? "idle" : sessionMode === "answer" ? "manual" : asrStatus === "finalizing" ? "finalizing" : "listening";
   const effectiveAnswerFramework = sessionFrameworkOverride || settings.answerFramework;
   const statusLabel = sessionPaused ? "已暂停" : answerStatus === "generating" ? "正在生成回答" : autoStatus === "waiting" ? "等待问题完成" : autoStatus === "confirmed" ? "即将自动回答" : sessionStage === "manual" ? "等待输入" : sessionStage === "complete" ? sessionMode === "asr" ? "转写已完成" : "回答已完成" : sessionStage === "listening" ? "正在聆听" : sessionStage === "finalizing" ? "正在提交问题" : sessionStage === "idle" && !llmReady && testMode !== "asr" ? "待配置模型" : sessionStage === "idle" ? "未开始" : "连接异常";
@@ -1777,10 +1789,18 @@ function App() {
   function draftSummaries() { setMaterials((state) => ({ ...state, candidateSummary: makeCandidateDraft(state.resume, state.personalNotes), jobSummary: makeJobDraft(state.jobDescription), confirmed: false })); }
   async function importRepositoryContext() {
     if (!repositoryUrl.trim()) { setNotice("请先输入 GitHub 或 Gitee 仓库地址。"); return; }
+    if (parseRepositoryUserUrl(repositoryUrl)) {
+      await discoverRepositoryUserContext();
+      return;
+    }
     setRepositoryImporting(true);
     try {
       const repository = await importRepositoryMaterial(repositoryUrl);
-      setMaterials((state) => ({ ...state, repository }));
+      setMaterials((state) => {
+        const existing = repositoryContextsFromMaterials(state).filter((item) => item.url.toLowerCase() !== repository.url.toLowerCase());
+        const repositories = mergeRepositoryContexts(repository, existing);
+        return { ...state, repository: repositories[0], repositories };
+      });
       setRepositoryUrl(repository.url);
       setNotice(`已导入 ${repository.name}，请检查摘要后确认用于回答。`);
     } catch (error) {
@@ -1788,6 +1808,51 @@ function App() {
     } finally {
       setRepositoryImporting(false);
     }
+  }
+  async function discoverRepositoryUserContext() {
+    const user = parseRepositoryUserUrl(repositoryUrl);
+    if (!user) { setNotice("请输入 GitHub 或 Gitee 用户主页地址，例如 https://github.com/用户名"); return; }
+    setRepositoryDiscovering(true);
+    try {
+      const discovery = await discoverPublicRepositories(user, { perPage: 100, maxPages: 20 });
+      setRepositoryDiscovery(discovery);
+      setRepositorySelectedIds(discovery.repositories.map((repository) => repository.id));
+      setNotice(discovery.repositories.length
+        ? `已找到 ${discovery.repositories.length} 个公开仓库${discovery.hasMore ? "，还有更多未读取" : ""}，请选择后导入。`
+        : "这个用户没有可读取的公开仓库。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "读取用户仓库失败");
+    } finally {
+      setRepositoryDiscovering(false);
+    }
+  }
+  async function importSelectedRepositories() {
+    if (!repositoryDiscovery) return;
+    const selected = repositoryDiscovery.repositories.filter((repository) => repositorySelectedIds.includes(repository.id));
+    if (!selected.length) { setNotice("请至少选择一个公开仓库。"); return; }
+    setRepositoryBatchImporting(true);
+    const imported: RepositoryContext[] = [];
+    const failed: string[] = [];
+    for (const repository of selected) {
+      try {
+        imported.push(await importRepositoryMaterial(repository.url));
+      } catch {
+        failed.push(repository.name);
+      }
+    }
+    if (imported.length) {
+      const selectedUrls = new Set(imported.map((repository) => repository.url.toLowerCase()));
+      setMaterials((state) => {
+        const existing = repositoryContextsFromMaterials(state).filter((repository) => !selectedUrls.has(repository.url.toLowerCase()));
+        const repositories = mergeRepositoryContexts(imported, existing);
+        return { ...state, repository: repositories[0], repositories };
+      });
+      setRepositoryUrl(repositoryDiscovery.user.url);
+    }
+    setNotice(imported.length
+      ? `已导入 ${imported.length} 个仓库${failed.length ? `；${failed.length} 个读取失败：${failed.slice(0, 4).join("、")}` : ""}。请逐项检查摘要后确认用于回答。`
+      : `没有仓库导入成功${failed.length ? `：${failed.slice(0, 4).join("、")}` : ""}。`);
+    setRepositoryBatchImporting(false);
   }
   function exportSafeBackup() {
     const bundle = createSafeDataBundle({ settings, materials, history });
@@ -1916,12 +1981,12 @@ function App() {
   if (isOverlayWindow) return <Overlay />;
 
   const statusClass = sessionStage === "complete" ? "complete" : sessionMode === "answer" && sessionActive ? "manual" : asrStatus;
-  const materialLabel = materials.confirmed ? "已确认并用于回答" : hasMaterials ? "有材料，等待确认" : "未添加材料";
-  const materialClass = materials.confirmed ? "ready" : hasMaterials ? "pending" : "muted";
+  const materialLabel = materials.confirmed || confirmedRepositoryCount > 0 ? "已确认并用于回答" : hasMaterials ? "有材料，等待确认" : "未添加材料";
+  const materialClass = materials.confirmed || confirmedRepositoryCount > 0 ? "ready" : hasMaterials ? "pending" : "muted";
   const navItems: Array<{ id: Tab; label: string; detail: string; index: string }> = [
     { id: "session", label: "面试", detail: sessionActive ? "进行中" : "准备下一场", index: "01" },
     { id: "materials", label: "资料库", detail: hasMaterials ? "已添加资料" : "暂无资料", index: "02" },
-    { id: "repo", label: "仓库", detail: materials.repository?.name || "导入 GitHub / Gitee", index: "03" },
+    { id: "repo", label: "仓库", detail: repositoryContexts.length ? `${repositoryContexts.length} 个已导入` : "导入 GitHub / Gitee", index: "03" },
     { id: "history", label: "会话", detail: history.length ? `${history.length} 场记录` : "历史记录", index: "04" },
     { id: "settings", label: "设置", detail: llmReady ? "服务已就绪" : "完成服务配置", index: "05" },
   ];
@@ -1930,7 +1995,7 @@ function App() {
   const modeLabels: Record<TestMode, string> = { all: "语音 + 回答", asr: "仅语音转写", answer: "仅问题回答" };
   const activeMode = sessionMode === "idle" ? testMode : sessionMode;
   const activeModeLabel = modeLabels[activeMode === "answer" || activeMode === "asr" || activeMode === "all" ? activeMode : testMode];
-  const materialCount = [materials.resume, materials.personalNotes, materials.jobDescription, materials.candidateSummary, materials.jobSummary, materials.repository?.summary || ""].filter((value) => Boolean(value?.trim())).length;
+  const materialCount = [materials.resume, materials.personalNotes, materials.jobDescription, materials.candidateSummary, materials.jobSummary, ...repositoryContexts.map((repository) => repository.summary)].filter((value) => Boolean(value?.trim())).length;
   const readinessItems = [
     { label: "回答模型", value: activeProfile?.name || "未选择模型", detail: llmReady ? `${activeProfile?.model || "模型已配置"}` : "需要 Base URL、Key 和模型", ready: llmReady || testMode === "asr" },
     { label: "语音识别", value: settings.asr.name || "未选择 ASR", detail: asrReady ? "可连接系统音频" : "需要 WebSocket 地址与凭证", ready: asrReady || testMode === "answer" },
@@ -1947,7 +2012,7 @@ function App() {
       <p className="notice" role="status" aria-live="polite" aria-atomic="true" title={notice}>{notice}</p>
       <div className="quick-status redesign-status-row" role="region" aria-label="当前配置状态"><span className={llmReady ? "ready" : "pending"}><i aria-hidden="true" />模型：{llmReady ? "已就绪" : "待配置"}</span><span className={asrReady ? "ready" : "muted"}><i aria-hidden="true" />ASR：{asrReady ? "已配置" : "未配置"}</span><span className={materialClass}><i aria-hidden="true" />资料：{materialLabel}</span>{storageError && <span className="pending"><i aria-hidden="true" />本机存储：异常</span>}<span className="autosave-state"><i aria-hidden="true" />设置自动保存在本机</span></div>
       {tab === "session" && <section className={`interview-workspace ${sessionActive ? "is-running" : "is-preparing"}`}>
-        {!sessionActive && <section className="interview-prepare panel"><div className="prepare-hero"><div><span className="hero-kicker">READY WHEN YOU ARE</span><h2>{settings.sessionTitleDraft.trim() || "开始一场新的面试"}</h2><p>先确认主题、岗位方向和资料，再选择测试模式。启动后，问题与回答会成为唯一主线。</p></div><div className="prepare-hero-meta"><span><i />准备态</span><strong>{INTERVIEW_FOCUS_LABELS[settings.interviewFocus]}</strong><small>{materialCount ? `${materialCount} 项资料可用` : "尚未添加资料"}</small></div></div><div className="prepare-layout"><div className="prepare-main"><div className="panel-head session-head"><div><div className="panel-kicker">SESSION SETUP</div><h3>准备这场面试</h3><p>每次启动都会创建一条新的文本会话记录。</p></div><span className="section-counter">{history.length ? `已完成 ${history.length} 场` : "首次使用"}</span></div><label className="session-title-draft"><span>面试主题</span><input value={settings.sessionTitleDraft} onChange={(event) => setSettings((state) => ({ ...state, sessionTitleDraft: event.target.value }))} placeholder="例如：售前解决方案岗位一面" /></label><div className="prepare-fields"><label><span>岗位方向</span><select value={settings.interviewFocus} onChange={(event) => setSettings((state) => ({ ...state, interviewFocus: event.target.value as InterviewFocus }))}>{Object.entries(INTERVIEW_FOCUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label><span>测试模式</span><select value={testMode} onChange={(event) => setTestMode(event.target.value as TestMode)}><option value="all">语音识别 + 回答</option><option value="asr">仅语音转写</option><option value="answer">仅问题回答</option></select></label></div><div className="prepare-materials"><div><span className="field-label">资料来源</span><strong>{materials.confirmed ? "资料已确认，可直接用于回答" : hasMaterials ? "有资料，建议先检查摘要" : "可选，不添加资料也能开始"}</strong><small>{materials.repository?.name ? `含仓库：${materials.repository.name}` : "简历、JD、个人补充和项目仓库"}</small></div><button className="secondary-button" onClick={() => goToTab("materials")}>打开资料库 <span aria-hidden="true">→</span></button></div><div className="start-check"><div className="start-check-head"><div><span className="panel-kicker">START CHECK</span><h3>启动检查</h3></div><span>{readinessItems.filter((item) => item.ready).length} / {readinessItems.length} 项满足</span></div><div className="readiness-list">{readinessItems.map((item) => <div className={`readiness-item ${item.ready ? "ready" : "pending"}`} key={item.label}><span className="readiness-icon" aria-hidden="true">{item.ready ? "✓" : "!"}</span><div><strong>{item.label}</strong><span>{item.value}</span></div><small>{item.detail}</small></div>)}</div></div><div className="prepare-start-row"><button className="primary start-button" onClick={() => startTest()}>开始面试 <span aria-hidden="true">→</span></button><span>启动后可随时暂停；系统只保留文本记录，不保存原始音频。</span></div></div><aside className="prepare-rail"><section className="prepare-side-block"><div className="panel-kicker">CURRENT CONFIG</div><h3>当前回答配置</h3><dl><div><dt>模型</dt><dd>{activeProfile?.name || "未选择"}</dd></div><div><dt>回答框架</dt><dd>{ANSWER_FRAMEWORK_LABELS[settings.answerFramework]}</dd></div><div><dt>自动模式</dt><dd>{settings.autoInterview.mode === "off" ? "手动提交" : settings.autoInterview.mode === "auto" ? "全自动" : "辅助自动"}</dd></div></dl><button className="text-button" onClick={() => goToTab("settings")}>调整服务与行为 →</button></section><section className="prepare-side-block"><div className="panel-kicker">CONTINUE CONTEXT</div><h3>承接上一场</h3>{pendingContextTurns.length ? <><strong className="side-highlight">{pendingContextTurns.filter((turn) => turn.included).length} / {pendingContextTurns.length} 轮已选</strong><p>载入上下文后，新问题会延续已选问答。</p><button className="text-button" onClick={() => { setSelectedHistorySessionId(loadedSourceSessionIdRef.current); goToTab("history"); }}>查看承接内容 →</button></> : history.length ? <><strong className="side-highlight">{history.length} 场历史会话</strong><p>从会话页选择一场，编辑后带入下一轮。</p><button className="text-button" onClick={() => goToTab("history")}>浏览会话记录 →</button></> : <p>完成第一场面试后，这里会显示可承接的上下文。</p>}</section><SessionProgress stage={sessionStage} mode={testMode} /></aside></div></section>}
+        {!sessionActive && <section className="interview-prepare panel"><div className="prepare-hero"><div><span className="hero-kicker">READY WHEN YOU ARE</span><h2>{settings.sessionTitleDraft.trim() || "开始一场新的面试"}</h2><p>先确认主题、岗位方向和资料，再选择测试模式。启动后，问题与回答会成为唯一主线。</p></div><div className="prepare-hero-meta"><span><i />准备态</span><strong>{INTERVIEW_FOCUS_LABELS[settings.interviewFocus]}</strong><small>{materialCount ? `${materialCount} 项资料可用` : "尚未添加资料"}</small></div></div><div className="prepare-layout"><div className="prepare-main"><div className="panel-head session-head"><div><div className="panel-kicker">SESSION SETUP</div><h3>准备这场面试</h3><p>每次启动都会创建一条新的文本会话记录。</p></div><span className="section-counter">{history.length ? `已完成 ${history.length} 场` : "首次使用"}</span></div><label className="session-title-draft"><span>面试主题</span><input value={settings.sessionTitleDraft} onChange={(event) => setSettings((state) => ({ ...state, sessionTitleDraft: event.target.value }))} placeholder="例如：售前解决方案岗位一面" /></label><div className="prepare-fields"><label><span>岗位方向</span><select value={settings.interviewFocus} onChange={(event) => setSettings((state) => ({ ...state, interviewFocus: event.target.value as InterviewFocus }))}>{Object.entries(INTERVIEW_FOCUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label><span>测试模式</span><select value={testMode} onChange={(event) => setTestMode(event.target.value as TestMode)}><option value="all">语音识别 + 回答</option><option value="asr">仅语音转写</option><option value="answer">仅问题回答</option></select></label></div><div className="prepare-materials"><div><span className="field-label">资料来源</span><strong>{materials.confirmed ? "资料已确认，可直接用于回答" : hasMaterials ? "有资料，建议先检查摘要" : "可选，不添加资料也能开始"}</strong><small>{repositoryMaterialLabel}</small></div><button className="secondary-button" onClick={() => goToTab("materials")}>打开资料库 <span aria-hidden="true">→</span></button></div><div className="start-check"><div className="start-check-head"><div><span className="panel-kicker">START CHECK</span><h3>启动检查</h3></div><span>{readinessItems.filter((item) => item.ready).length} / {readinessItems.length} 项满足</span></div><div className="readiness-list">{readinessItems.map((item) => <div className={`readiness-item ${item.ready ? "ready" : "pending"}`} key={item.label}><span className="readiness-icon" aria-hidden="true">{item.ready ? "✓" : "!"}</span><div><strong>{item.label}</strong><span>{item.value}</span></div><small>{item.detail}</small></div>)}</div></div><div className="prepare-start-row"><button className="primary start-button" onClick={() => startTest()}>开始面试 <span aria-hidden="true">→</span></button><span>启动后可随时暂停；系统只保留文本记录，不保存原始音频。</span></div></div><aside className="prepare-rail"><section className="prepare-side-block"><div className="panel-kicker">CURRENT CONFIG</div><h3>当前回答配置</h3><dl><div><dt>模型</dt><dd>{activeProfile?.name || "未选择"}</dd></div><div><dt>回答框架</dt><dd>{ANSWER_FRAMEWORK_LABELS[settings.answerFramework]}</dd></div><div><dt>自动模式</dt><dd>{settings.autoInterview.mode === "off" ? "手动提交" : settings.autoInterview.mode === "auto" ? "全自动" : "辅助自动"}</dd></div></dl><button className="text-button" onClick={() => goToTab("settings")}>调整服务与行为 →</button></section><section className="prepare-side-block"><div className="panel-kicker">CONTINUE CONTEXT</div><h3>承接上一场</h3>{pendingContextTurns.length ? <><strong className="side-highlight">{pendingContextTurns.filter((turn) => turn.included).length} / {pendingContextTurns.length} 轮已选</strong><p>载入上下文后，新问题会延续已选问答。</p><button className="text-button" onClick={() => { setSelectedHistorySessionId(loadedSourceSessionIdRef.current); goToTab("history"); }}>查看承接内容 →</button></> : history.length ? <><strong className="side-highlight">{history.length} 场历史会话</strong><p>从会话页选择一场，编辑后带入下一轮。</p><button className="text-button" onClick={() => goToTab("history")}>浏览会话记录 →</button></> : <p>完成第一场面试后，这里会显示可承接的上下文。</p>}</section><SessionProgress stage={sessionStage} mode={testMode} /></aside></div></section>}
         <section className={`session-grid interview-session-grid ${sessionActive ? "running-session-grid" : "preparing-session-grid"}`}>
         <div className="panel session-panel interview-question-panel">
           <div className="panel-head session-head"><div><div className="panel-kicker">LIVE SESSION</div><h2>当前面试问题</h2><p>{activeModeLabel} · 默认输出设备 · PCM16 / Mono / 16kHz</p></div><span className={`session-badge ${sessionStage}`}><i />{statusLabel}</span></div>
@@ -1973,7 +2038,42 @@ function App() {
         {settings.asr.debug && <div className="panel debug-panel"><h2>ASR 调试消息</h2><pre>{debug.join("\n\n") || "等待 WebSocket 消息…"}</pre></div>}
        </section></section>}
        {tab === "materials" && <section className="materials-grid library-layout"><aside className="panel materials-index"><div className="panel-kicker">LIBRARY</div><h2>资料目录</h2><p>{materialCount ? `${materialCount} 项内容已添加` : "还没有添加内容"}</p><div className="materials-index-list"><div className="materials-index-item active"><span>CV</span><div><strong>候选人资料</strong><small>{materials.resume.trim() ? "简历已添加" : "等待简历"}</small></div></div><div className="materials-index-item"><span>JD</span><div><strong>目标岗位</strong><small>{materials.jobDescription.trim() ? "岗位描述已添加" : "等待岗位描述"}</small></div></div><button type="button" className="materials-index-item" onClick={() => goToTab("repo")}><span>REPO</span><div><strong>项目仓库</strong><small>{materials.repository?.name || "可选项目资料"}</small></div><em aria-hidden="true">›</em></button></div><div className="materials-index-note"><strong>{materials.confirmed ? "已确认" : hasMaterials ? "等待确认" : "可选"}</strong><span>只有确认后的摘要会参与回答。</span></div></aside><div className="panel"><div className="panel-head"><div><div className="panel-kicker">CANDIDATE CONTEXT</div><h2>候选人材料</h2><p>可选：PDF、DOCX、TXT 或直接粘贴。</p></div><button onClick={() => importMaterial("resume")}>导入简历</button></div><label>简历原文</label><textarea rows={10} value={materials.resume} onChange={(event) => setMaterials((state) => ({ ...state, resume: event.target.value, confirmed: false }))} /><label>个人补充资料</label><textarea rows={5} value={materials.personalNotes} onChange={(event) => setMaterials((state) => ({ ...state, personalNotes: event.target.value, confirmed: false }))} /></div><div className="panel"><div className="panel-head"><div><div className="panel-kicker">TARGET ROLE</div><h2>目标岗位</h2><p>可选：一次会话仅使用一份 JD。</p></div><button onClick={() => importMaterial("jobDescription")}>导入 JD</button></div><label>岗位描述</label><textarea rows={10} value={materials.jobDescription} onChange={(event) => setMaterials((state) => ({ ...state, jobDescription: event.target.value, confirmed: false }))} /><button className="primary full" onClick={draftSummaries}>生成可编辑摘要草稿</button></div><div className="panel full-width context-panel"><div className="panel-head"><div><div className="panel-kicker">READY FOR LLM</div><h2>确认后的 LLM 上下文</h2><p>只有确认后的摘要才会参与回答，避免模型误用未检查的信息。</p></div><div className="context-actions"><span className={`context-state ${materialClass}`}><i />{materialLabel}</span><button className={materials.confirmed ? "success" : "primary"} onClick={() => setMaterials((state) => ({ ...state, confirmed: !state.confirmed }))}>{materials.confirmed ? "取消确认" : "确认并用于回答"}</button></div></div><div className="summary-grid"><div><label>候选人事实摘要</label><textarea rows={12} value={materials.candidateSummary} onChange={(event) => setMaterials((state) => ({ ...state, candidateSummary: event.target.value, confirmed: false }))} /></div><div><label>岗位要求摘要</label><textarea rows={12} value={materials.jobSummary} onChange={(event) => setMaterials((state) => ({ ...state, jobSummary: event.target.value, confirmed: false }))} /></div></div></div></section>}
-       {tab === "repo" && <RepositoryWorkspace repository={materials.repository} repositoryUrl={repositoryUrl} importing={repositoryImporting} onUrlChange={setRepositoryUrl} onImport={() => void importRepositoryContext()} onSummaryChange={(summary) => setMaterials((state) => ({ ...state, repository: state.repository ? { ...state.repository, summary, confirmed: false } : undefined }))} onToggleConfirmed={() => setMaterials((state) => ({ ...state, repository: state.repository ? { ...state.repository, confirmed: !state.repository.confirmed } : undefined }))} onRemove={() => setMaterials((state) => ({ ...state, repository: undefined }))} />}
+       {tab === "repo" && <RepositoryWorkspace
+         repository={materials.repository}
+         repositories={repositoryContexts}
+         repositoryUrl={repositoryUrl}
+         importing={repositoryImporting}
+         discovering={repositoryDiscovering}
+         batchImporting={repositoryBatchImporting}
+         discovery={repositoryDiscovery}
+         selectedRepositoryIds={repositorySelectedIds}
+         onUrlChange={setRepositoryUrl}
+         onImport={() => void importRepositoryContext()}
+         onDiscover={() => void discoverRepositoryUserContext()}
+         onBatchImport={() => void importSelectedRepositories()}
+         onToggleRepositorySelection={(id) => setRepositorySelectedIds((items) => items.includes(id) ? items.filter((item) => item !== id) : [...items, id])}
+         onSelectAllRepositories={(selected) => setRepositorySelectedIds(selected && repositoryDiscovery ? repositoryDiscovery.repositories.map((item) => item.id) : [])}
+         onSelectRepository={(selected) => setMaterials((state) => ({ ...state, repository: selected }))}
+         onSummaryChange={(summary) => setMaterials((state) => {
+           const current = state.repository;
+           if (!current) return state;
+           const updated = { ...current, summary, confirmed: false };
+           const repositories = repositoryContextsFromMaterials(state).map((item) => item.url === current.url ? updated : item);
+           return { ...state, repository: updated, repositories };
+         })}
+         onToggleConfirmed={() => setMaterials((state) => {
+           const current = state.repository;
+           if (!current) return state;
+           const updated = { ...current, confirmed: !current.confirmed };
+           const repositories = repositoryContextsFromMaterials(state).map((item) => item.url === current.url ? updated : item);
+           return { ...state, repository: updated, repositories };
+         })}
+         onRemove={() => setMaterials((state) => {
+           const current = state.repository;
+           const repositories = repositoryContextsFromMaterials(state).filter((item) => item.url !== current?.url);
+           return { ...state, repository: repositories[0], repositories };
+         })}
+       />}
        {tab === "settings" && <section className="settings-stack settings-workspace"><div className="settings-overview"><div><div className="panel-kicker">WORKSPACE CONFIGURATION</div><h2>服务与行为</h2><p>常用配置保持在前，高级协议和数据恢复按需展开。</p></div><div className="settings-overview-actions"><span className={`context-state ${llmReady ? "ready" : "pending"}`}><i />{llmReady ? "回答模型已就绪" : "模型待配置"}</span><button className="primary" onClick={saveConfiguration}>保存配置</button></div></div><AsrProviderPanel settings={settings} asrProfileTests={asrProfileTests} expandedPresetIds={expandedAsrPresetIds} onToggleExpanded={toggleAsrPresetExpanded} onSelect={selectAsrPreset} onUpdate={updateAsrProfile} onTest={testAsrProfile} onSave={saveConfiguration} />
         <LlmProviderPanel settings={settings} setSettings={setSettings} profileTests={profileTests} profileUsages={profileUsages} profileModelStates={profileModelStates} profileQuery={profileQuery} profileSort={profileSort} expandedProfileIds={expandedProfileIds} setProfileQuery={setProfileQuery} setProfileSort={setProfileSort} onToggleExpanded={toggleProfileExpanded} onAddPreset={addProfileFromPreset} onApplyPreset={applyProfilePreset} onDuplicate={duplicateProfile} onRemove={removeProfile} onMove={moveProfile} onTest={testProfile} onUsage={queryProfileUsage} onLoadModels={loadProfileModels} onInvalidateTest={(id) => setProfileTests((state) => { const next = { ...state }; delete next[id]; return next; })} onInvalidateUsage={(id) => setProfileUsages((state) => { const next = { ...state }; delete next[id]; return next; })} onSave={saveConfiguration} />
         <div className="panel"><div className="panel-head"><div><h2>回答策略</h2><p>默认策略会用于新会话；会话页可以临时覆盖，不会改动这里的配置。</p></div></div><div className="form-grid"><Field label="面试方向" value={settings.interviewFocus} onChange={(value) => setSettings((state) => ({ ...state, interviewFocus: value as InterviewFocus }))} select={Object.entries(INTERVIEW_FOCUS_LABELS)} /><Field label="默认回答框架" value={settings.answerFramework} onChange={(value) => setSettings((state) => ({ ...state, answerFramework: value as AnswerFramework }))} select={Object.entries(ANSWER_FRAMEWORK_LABELS)} /></div></div>
@@ -2004,10 +2104,20 @@ function App() {
 
 type RepositoryWorkspaceProps = {
   repository?: RepositoryContext;
+  repositories: RepositoryContext[];
   repositoryUrl: string;
   importing: boolean;
+  discovering: boolean;
+  batchImporting: boolean;
+  discovery: PublicRepositoryDiscovery | null;
+  selectedRepositoryIds: string[];
   onUrlChange: (value: string) => void;
   onImport: () => void;
+  onDiscover: () => void;
+  onBatchImport: () => void;
+  onToggleRepositorySelection: (id: string) => void;
+  onSelectAllRepositories: (selected: boolean) => void;
+  onSelectRepository: (repository: RepositoryContext) => void;
   onSummaryChange: (value: string) => void;
   onToggleConfirmed: () => void;
   onRemove: () => void;
@@ -2037,7 +2147,7 @@ function formatRepositoryDate(value: string) {
   return Number.isNaN(date.getTime()) ? "未知时间" : date.toLocaleString();
 }
 
-function RepositoryWorkspace({ repository, repositoryUrl, importing, onUrlChange, onImport, onSummaryChange, onToggleConfirmed, onRemove }: RepositoryWorkspaceProps) {
+function RepositoryWorkspace({ repository, repositories, repositoryUrl, importing, discovering, batchImporting, discovery, selectedRepositoryIds, onUrlChange, onImport, onDiscover, onBatchImport, onToggleRepositorySelection, onSelectAllRepositories, onSelectRepository, onSummaryChange, onToggleConfirmed, onRemove }: RepositoryWorkspaceProps) {
   const [view, setView] = useState<RepositoryView>("overview");
   const files = useMemo(() => (repository?.fileTree || "").split(/\r?\n/).map((path) => path.trim()).filter(Boolean), [repository?.fileTree]);
   const keyFiles = useMemo(() => parseRepositoryKeyFiles(repository?.keyFiles || ""), [repository?.keyFiles]);
@@ -2057,16 +2167,31 @@ function RepositoryWorkspace({ repository, repositoryUrl, importing, onUrlChange
 
   function submitImport(event: ChangeEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!importing) onImport();
+    if (importing || discovering) return;
+    if (parseRepositoryUserUrl(repositoryUrl)) onDiscover();
+    else onImport();
   }
 
   const importForm = (className = "repository-url-bar") => <form className={className} onSubmit={submitImport}>
-    <label htmlFor="repository-url"><span>仓库地址</span><input id="repository-url" value={repositoryUrl} onChange={(event) => onUrlChange(event.target.value)} placeholder="https://github.com/owner/repo 或 https://gitee.com/owner/repo" /></label>
-    <button type="submit" className="primary" disabled={importing || !repositoryUrl.trim()}>{importing ? "导入中…" : repository ? "重新导入" : "导入仓库"}</button>
+    <label htmlFor="repository-url"><span>仓库地址或用户主页</span><input id="repository-url" value={repositoryUrl} onChange={(event) => onUrlChange(event.target.value)} placeholder="https://github.com/owner/repo 或 https://github.com/username" /></label>
+    <button type="submit" className="primary" disabled={importing || discovering || !repositoryUrl.trim()}>{importing ? "导入中…" : discovering ? "读取仓库中…" : parseRepositoryUserUrl(repositoryUrl) ? "读取用户仓库" : repository ? "重新导入" : "导入仓库"}</button>
   </form>;
+
+  const selectedCount = discovery ? discovery.repositories.filter((item) => selectedRepositoryIds.includes(item.id)).length : 0;
+  const allSelected = Boolean(discovery?.repositories.length && selectedCount === discovery.repositories.length);
+  const importedList = repositories.length > 1 ? <section className="repository-imported-list panel" aria-label="已导入仓库列表">
+    <div className="repository-main-head"><div><div className="panel-kicker">IMPORTED PROJECTS</div><h3>已导入项目</h3><p>选择一个项目查看摘要；只有标记为已确认的项目会参与回答。</p></div><strong className="repository-view-count">{repositories.length} 个仓库 · {repositories.filter((item) => item.confirmed).length} 个已确认</strong></div>
+    <div className="repository-imported-grid">{repositories.map((item) => <button type="button" className={`repository-imported-item ${repository?.url === item.url ? "active" : ""}`} key={item.url} onClick={() => onSelectRepository(item)}><span className="repository-provider-mark">{item.provider === "github" ? "GH" : "GT"}</span><span><strong>{item.name}</strong><small>{item.description || "暂无项目描述"}</small></span><em className={item.confirmed ? "ready" : "pending"}>{item.confirmed ? "已确认" : "待检查"}</em></button>)}</div>
+  </section> : null;
+  const discoveryPanel = discovery ? <section className="repository-discovery panel" aria-label="公开仓库列表">
+    <div className="repository-main-head"><div><div className="panel-kicker">PUBLIC REPOSITORIES</div><h3>{discovery.user.username} 的公开仓库</h3><p>已读取 {discovery.repositories.length} 个公开仓库{discovery.hasMore ? "，仍有更多未读取" : ""}。默认全选，可取消不相关项目。</p></div><strong className="repository-view-count">{selectedCount} / {discovery.repositories.length} 已选择</strong></div>
+    <div className="repository-discovery-actions"><button type="button" className="text-button" onClick={() => onSelectAllRepositories(!allSelected)}>{allSelected ? "取消全选" : "全选"}</button><button type="button" className="primary" disabled={batchImporting || !selectedCount} onClick={onBatchImport}>{batchImporting ? `正在导入 ${selectedCount} 个…` : `导入已选 ${selectedCount} 个`}</button></div>
+    <div className="repository-candidate-list">{discovery.repositories.map((item) => <label className="repository-candidate" key={item.id}><input type="checkbox" checked={selectedRepositoryIds.includes(item.id)} onChange={() => onToggleRepositorySelection(item.id)} /><span className="repository-candidate-copy"><strong>{item.fullName}</strong><small>{item.description || "暂无描述"}</small></span><span className="repository-candidate-meta">{item.language || "未知语言"} · ★ {item.stars} · {item.isFork ? "Fork" : item.archived ? "归档" : "公开"}</span></label>)}</div>
+  </section> : null;
 
   if (!repository) {
     return <section className="repository-workspace">
+      {discoveryPanel}
       <div className="repository-empty panel">
         <div className="repository-empty-copy"><span className="repository-provider-mark">REPO</span><div><div className="panel-kicker">REPOSITORY WORKSPACE</div><h2>导入一个项目仓库</h2><p>把公开的 GitHub 或 Gitee 项目带进面试上下文，先查看摘要、目录和关键配置，再决定是否用于回答。</p></div></div>
         {importForm("repository-url-bar repository-empty-form")}
@@ -2084,6 +2209,8 @@ function RepositoryWorkspace({ repository, repositoryUrl, importing, onUrlChange
   ];
 
   return <section className="repository-workspace">
+    {discoveryPanel}
+    {importedList}
     <header className="repository-hero panel">
       <div className="repository-hero-copy"><div className="panel-kicker">REPOSITORY WORKSPACE</div><div className="repository-identity"><span className="repository-provider-mark">{providerLabel}</span><div><h2>{repository.name}</h2><p>{repository.description || "暂无仓库描述，可在摘要中补充本人负责的内容。"}</p><small title={repository.url}>{repository.url}</small></div></div></div>
       <div className="repository-hero-actions"><span className={`context-state ${repository.confirmed ? "ready" : "pending"}`}><i />{statusLabel}</span><button type="button" className="secondary-button" onClick={() => void openRepository()}>打开原仓库 <span aria-hidden="true">↗</span></button></div>

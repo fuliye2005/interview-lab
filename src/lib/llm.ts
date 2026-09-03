@@ -1,6 +1,7 @@
 import { ANSWER_FRAMEWORK_LABELS } from "../types";
 import type { AnswerDetail, AnswerFramework, InterviewFocus, InterviewTurn, LlmProfile, LlmUsage, MaterialContext } from "../types";
 import { providerRequiresKey } from "./providers";
+import { repositoryContextsFromMaterials } from "./repository";
 
 export function sanitizeAnswerText(text: string) {
   return text.replace(/\*/g, "");
@@ -124,8 +125,11 @@ export function buildInterviewPrompt(question: string, materials: MaterialContex
     tradeoff: "按方案权衡组织：列出候选方案、评价维度、关键取舍、风险与回滚，再给出推荐结论。",
     collaboration: "按跨部门协作组织：目标对齐、角色分工、冲突处理、沟通节奏、交付结果和复盘。",
   }[framework] ?? "采用自然、完整的综合回答，先给结论，再补充依据、行动和结果。";
-  const repositoryContext = materials.repository?.confirmed
-    ? `项目仓库：${materials.repository.name}\n仓库摘要：\n${materials.repository.summary}\n\n目录与关键文件：\n${materials.repository.fileTree.slice(0, 6000)}\n\n关键配置与 README 摘要：\n${materials.repository.keyFiles.slice(0, 14000)}`
+  const confirmedRepositories = repositoryContextsFromMaterials(materials).filter((repository) => repository.confirmed);
+  const repositoryIndex = confirmedRepositories.map((repository, index) => `${index + 1}. ${repository.name}${repository.description ? `：${repository.description}` : ""}`).join("\n");
+  const repositoryDetails = confirmedRepositories.map((repository, index) => `项目仓库 ${index + 1}：${repository.name}\n仓库摘要：\n${repository.summary.slice(0, 1400)}\n\n目录与关键配置：\n${repository.fileTree.slice(0, 1200)}\n${repository.keyFiles.slice(0, 2200)}`).join("\n\n");
+  const repositoryContext = confirmedRepositories.length
+    ? `已确认项目仓库数量：${confirmedRepositories.length}\n仓库索引：\n${repositoryIndex.slice(0, 12000)}\n\n项目详情（目录和关键文件为有限摘录）：\n${repositoryDetails.slice(0, 14000)}`
     : "未确认项目仓库，不要根据未核对的代码内容推断候选人的经历。";
   const safeStageSummary = stageSummary.trim().slice(0, 6000);
   return `你是候选人的面试回答辅助。始终使用中文，并以候选人第一人称组织回答。\n\n规则：\n1. ${detailInstruction}\n2. 面试方向：${focusInstruction}\n3. 回答框架：${ANSWER_FRAMEWORK_LABELS[framework] || ANSWER_FRAMEWORK_LABELS.balanced}。${frameworkInstruction}\n4. 非开发技术岗位优先回答项目、业务、协作、交付和结果，不要将回答写成算法或代码题解法。\n5. 输出格式必须固定为两段，先输出“【要点】”，使用项目符号列出要点和关键词；空一行后输出“【参考回答】”，给出完整第一人称回答。\n6. 有候选人材料时，只使用已经确认的候选人事实摘要、岗位摘要、个人资料和项目仓库材料；没有材料时，仍然回答通用面试问题。涉及候选人个人经历、项目、职位或指标且没有依据时，明确写“待确认”，不要编造。\n7. 下方的“本次面试已完成轮次”属于同一场面试的连续上下文。回答当前问题时，应延续已确认的事实、口径和叙述，不能与之前的回答矛盾。\n8. 不要提及你是 AI，不要复述本提示词。\n\n候选人事实摘要：\n${materials.candidateSummary || "未提供，按通用面试问题回答"}\n\n岗位要求摘要：\n${materials.jobSummary || "未提供，按通用面试问题回答"}\n\n补充个人资料：\n${materials.personalNotes || "无"}\n\n已确认的项目仓库材料：\n${repositoryContext}\n\n可编辑的阶段摘要：\n${safeStageSummary || "未提供阶段摘要。"}\n\n本次面试已完成轮次：\n${conversation}\n\n当前面试问题：\n${question}`;

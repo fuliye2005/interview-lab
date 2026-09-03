@@ -94,6 +94,8 @@ export interface MaterialContext {
   candidateSummary: string;
   jobSummary: string;
   confirmed: boolean;
+  /** New collection form; keep `repository` for old saved snapshots. */
+  repositories?: RepositoryContext[];
   repository?: RepositoryContext;
 }
 
@@ -108,6 +110,57 @@ export interface RepositoryContext {
   summary: string;
   confirmed: boolean;
   importedAt: string;
+}
+
+/** A GitHub/Gitee user page that can be used as a repository discovery source. */
+export interface RepositoryUserRef {
+  provider: "github" | "gitee";
+  username: string;
+  url: string;
+}
+
+/** Stable, provider-neutral metadata for a selectable public repository. */
+export interface PublicRepository {
+  id: string;
+  provider: "github" | "gitee";
+  owner: string;
+  name: string;
+  fullName: string;
+  url: string;
+  description: string;
+  defaultBranch: string;
+  language: string;
+  stars: number;
+  forks: number;
+  updatedAt: string;
+  isFork: boolean;
+  archived: boolean;
+  visibility: string;
+}
+
+export type RepositorySort = "updated" | "created" | "pushed" | "full_name";
+
+export interface RepositoryListOptions {
+  page?: number;
+  perPage?: number;
+  sort?: RepositorySort;
+  direction?: "asc" | "desc";
+  signal?: AbortSignal;
+}
+
+export interface PublicRepositoryPage {
+  user: RepositoryUserRef;
+  repositories: PublicRepository[];
+  page: number;
+  perPage: number;
+  hasNextPage: boolean;
+}
+
+export interface PublicRepositoryDiscovery {
+  user: RepositoryUserRef;
+  repositories: PublicRepository[];
+  pagesFetched: number;
+  hasMore: boolean;
 }
 
 export interface SessionRecord {
