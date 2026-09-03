@@ -24,7 +24,11 @@ function apiBase(provider: Provider) {
 
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url, { headers: { Accept: "application/vnd.github+json" } });
-  if (!response.ok) throw new Error(`仓库请求失败：${response.status}`);
+  if (!response.ok) {
+    if (response.status === 404) throw new Error("仓库不存在、地址错误，或仓库不是公开仓库");
+    if (response.status === 403) throw new Error("GitHub API 暂时拒绝了请求，可能已达到访问频率限制，请稍后再试");
+    throw new Error(`仓库请求失败：${response.status}`);
+  }
   return response.json() as Promise<T>;
 }
 
@@ -68,7 +72,7 @@ export async function importRepository(input: string): Promise<RepositoryContext
   const fileTree = files.map((file) => file.path || file.name || "").filter(Boolean).join("\n");
   const keyFiles = (await Promise.all(files.filter((file) => isKeyFile(file.name || "")).slice(0, 12).map(async (file) => {
     const content = await readFileContent(file);
-    return content ? `### ${file.path || file.name}\n${content}` : "";
+    return content ? `### __INTERVIEW_LAB_FILE__ ${file.path || file.name}\n${content}` : "";
   }))).filter(Boolean).join("\n\n");
   const name = metadata.full_name || `${parsed.owner}/${parsed.repo}`;
   const summary = [`项目：${name}`, `仓库地址：${parsed.url}`, `默认分支：${branch}`, metadata.description ? `项目描述：${metadata.description}` : "", "请补充你本人在该项目中的职责、关键决策、使用的工具以及最终结果。"].filter(Boolean).join("\n");

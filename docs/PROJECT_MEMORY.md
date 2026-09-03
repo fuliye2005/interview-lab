@@ -138,3 +138,12 @@
 - 悬浮面试台重构为面试中主界面：状态顶栏、当前问题、回答提纲/正文、单一主操作；布局、置顶、透明度、字号和点击穿透移入设置弹层。
 - 主窗口和悬浮窗分别使用 `src/ui-redesign.css` 与 `src/overlay-redesign.css`，保留原有会话、上下文、模型和 ASR 事件协议。
 - 本地验证：`npm ci`、`npm run build`、74 项 Vitest、`git diff --check` 均通过；本轮未连接、模拟或验收真实 ASR。
+
+## 0.4.2 仓库工作台修正（2026-09-03）
+
+- 修复仓库导入入口：增加独立 `/repo` 应用页面，默认 `/` 仍进入面试页；侧栏和资料库中的 `REPO` 项均可切换到仓库工作台，浏览器后退可回到面试页。
+- 仓库工作台支持公开 GitHub/Gitee 地址导入、仓库概览、默认分支/文件统计、有限文件树、关键文件只读预览、摘要编辑、确认用于回答、移除和重新导入；打开原仓库使用系统默认浏览器。
+- 关键文件导入改用 `__INTERVIEW_LAB_FILE__` 标记，避免 README 内部 Markdown `###` 标题被误识别为文件；旧格式仍保留兼容解析。
+- `404` 和 GitHub API 访问频率限制会显示可理解的错误提示，不会把无效地址误认为应用页面。
+- 已用 `gh` 登录的 `fuliye2005` 账号公开仓库做读取验证：`interview-lab`、`QQ-Chat-AI-Analyzer`、`codex-native-turn-usage`、`weix`、`career-ops-workflow` 均成功读取元数据、目录和关键文件；`fuliye2005/repo` 返回 404，确认该仓库不存在。
+- 本地验证：`npm run build`、74 项 Vitest、`git diff --check` 通过；Vite `http://127.0.0.1:1420/repo` 返回应用入口，实际页面标题为“仓库”，导航和后退已通过浏览器验收。未把 GitHub Token 写入代码或仓库。

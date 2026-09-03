@@ -5,6 +5,7 @@ import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { GenericAsrSession } from "./lib/asr";
 import { ASR_PROVIDER_PRESETS, asrConfigPreview, asrConfigReady, asrMissingFields, asrProviderLabel, classifyAsrError, testAsrConnection, testAsrFinalText } from "./lib/asr-providers";
 import { BUILD_INFO } from "./lib/build-info";
@@ -18,14 +19,14 @@ import { formatShortcut, shortcutKeyToken, toGlobalShortcut } from "./lib/shortc
 import { clearHistory, createSafeDataBundle, defaultSettings, emptyMaterials, getStorageDiagnostics, initializeStorage, loadHistory, loadMaterials, loadSettings, markCleanShutdown, mergeStoredHeaderConfig, parseSafeDataBundle, restoreLatestBackup, saveHistory, saveMaterials, saveSettings, saveSnapshot } from "./lib/storage";
 import { parseSimpleToml, serializeSimpleToml, type SimpleTomlValue } from "./lib/toml";
 import type { StorageDiagnostics } from "./lib/storage";
-import type { AnswerFramework, AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, AutoInterviewMode, AutoInterviewStatus, InterviewConfigSnapshot, InterviewContextTurn, InterviewDraft, InterviewFocus, InterviewSession, InterviewTurn, LlmHealth, LlmProfile, LlmProviderPresetId, MaterialContext, OverlayLayout, OverlaySettings, SessionRecord, WheelScrollSettings } from "./types";
+import type { AnswerFramework, AnswerStatus, AppSettings, AsrPreset, AsrProviderConfig, AsrStatus, AutoInterviewMode, AutoInterviewStatus, InterviewConfigSnapshot, InterviewContextTurn, InterviewDraft, InterviewFocus, InterviewSession, InterviewTurn, LlmHealth, LlmProfile, LlmProviderPresetId, MaterialContext, OverlayLayout, OverlaySettings, RepositoryContext, SessionRecord, WheelScrollSettings } from "./types";
 import { ANSWER_FRAMEWORK_LABELS, createAsrPreset, createDefaultLlmProfile, INTERVIEW_FOCUS_LABELS } from "./types";
 import "./App.css";
 import "./theme.css";
 import "./overlay-redesign.css";
 import "./ui-redesign.css";
 
-type Tab = "session" | "materials" | "settings" | "history";
+type Tab = "session" | "materials" | "repo" | "settings" | "history";
 type SessionMode = "idle" | "all" | "asr" | "answer";
 type TestMode = "all" | "asr" | "answer";
 type SessionStage = "idle" | "manual" | "listening" | "finalizing" | "answering" | "complete";
@@ -35,6 +36,7 @@ type ProfileSort = "active" | "name" | "updated";
 type ProfileModelState = { status: "idle" | "loading" | "success" | "error"; models: string[]; message?: string };
 type AsrProfileTestState = { status: "idle" | "testing" | "success" | "error"; mode?: "connection" | "final"; latencyMs?: number; finalText?: string; errorKind?: string; message?: string; hint?: string };
 type LlmEditorTab = "basic" | "parameters" | "advanced" | "raw" | "toml";
+type RepositoryView = "overview" | "files" | "key-files";
 
 function persistedProfileTest(profile: Pick<LlmProfile, "health">): ProfileTestState {
   return profile.health ? { ...profile.health } : { status: "idle" };
@@ -157,6 +159,19 @@ function parseContextWindow(value: string) {
   const multiplier = match[2]?.toLowerCase() === "m" ? 1_000_000 : match[2]?.toLowerCase() === "k" ? 1_000 : 1;
   const parsed = Math.round(Number(match[1]) * multiplier);
   return Number.isFinite(parsed) && parsed >= 1_000 && parsed <= 128_000_000 ? parsed : undefined;
+}
+
+function tabFromLocation(): Tab {
+  const path = window.location.pathname.replace(/\/+$/, "") || "/";
+  const page = new URLSearchParams(window.location.search).get("page");
+  const hash = window.location.hash.replace(/^#/, "");
+  const hashPage = hash === "repo" || hash.endsWith("/repo") ? "repo" : new URLSearchParams(hash.startsWith("?") ? hash.slice(1) : hash).get("page");
+  if (path === "/repo" || path.endsWith("/repo") || page === "repo" || hashPage === "repo") return "repo";
+  return "session";
+}
+
+function routeForTab(tab: Tab) {
+  return tab === "repo" ? "/repo" : "/";
 }
 
 function profileTomlValues(profile: LlmProfile, focus: InterviewFocus, revealKey = false): Record<string, SimpleTomlValue> {
@@ -391,7 +406,21 @@ function App() {
   const desktopRuntime = isTauri();
   const isOverlayWindow = new URLSearchParams(window.location.search).get("overlay") === "1";
   const runtimeEnvironment = useMemo(() => detectRuntimeEnvironment(navigator.userAgent, navigator.platform, desktopRuntime), [desktopRuntime]);
-  const [tab, setTab] = useState<Tab>("session");
+  const [tab, setTab] = useState<Tab>(() => tabFromLocation());
+  const goToTab = (next: Tab) => {
+    setTab(next);
+    if (isOverlayWindow) return;
+    const nextRoute = routeForTab(next);
+    if (window.location.pathname !== nextRoute) {
+      try { window.history.pushState({ tab: next }, "", nextRoute); } catch { /* Tauri asset URLs may not expose a writable history path. */ }
+    }
+  };
+  useEffect(() => {
+    if (isOverlayWindow) return;
+    const handlePopState = () => setTab(tabFromLocation());
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [isOverlayWindow]);
   const [settings, setSettings] = useState<AppSettings>(() => desktopRuntime && !isOverlayWindow ? defaultSettings() : loadSettings());
   const [materials, setMaterials] = useState<MaterialContext>(() => desktopRuntime && !isOverlayWindow ? emptyMaterials() : loadMaterials());
   const [history, setHistory] = useState<InterviewSession[]>(() => desktopRuntime && !isOverlayWindow ? [] : loadHistory());
@@ -1248,7 +1277,7 @@ function App() {
     setAnswer("");
     setAnswerStatus("idle");
     setSettings((state) => ({ ...state, sessionTitleDraft: `${session.title} · 下一轮` }));
-    setTab("session");
+    goToTab("session");
     setNotice(noticeText || `已载入 ${context.length} 轮历史问答，其中 ${turns.length} 轮将承接；点击“启动测试”后会创建下一轮面试记录。`);
   }
   function loadSessionContext(session: InterviewSession) {
@@ -1892,11 +1921,12 @@ function App() {
   const navItems: Array<{ id: Tab; label: string; detail: string; index: string }> = [
     { id: "session", label: "面试", detail: sessionActive ? "进行中" : "准备下一场", index: "01" },
     { id: "materials", label: "资料库", detail: hasMaterials ? "已添加资料" : "暂无资料", index: "02" },
-    { id: "history", label: "会话", detail: history.length ? `${history.length} 场记录` : "历史记录", index: "03" },
-    { id: "settings", label: "设置", detail: llmReady ? "服务已就绪" : "完成服务配置", index: "04" },
+    { id: "repo", label: "仓库", detail: materials.repository?.name || "导入 GitHub / Gitee", index: "03" },
+    { id: "history", label: "会话", detail: history.length ? `${history.length} 场记录` : "历史记录", index: "04" },
+    { id: "settings", label: "设置", detail: llmReady ? "服务已就绪" : "完成服务配置", index: "05" },
   ];
-  const pageTitle = tab === "session" ? "面试" : tab === "materials" ? "资料库" : tab === "history" ? "会话" : "设置";
-  const pageKicker = tab === "session" ? "INTERVIEW DESK" : tab === "materials" ? "MATERIAL LIBRARY" : tab === "history" ? "SESSION ARCHIVE" : "WORKSPACE SETTINGS";
+  const pageTitle = tab === "session" ? "面试" : tab === "materials" ? "资料库" : tab === "repo" ? "仓库" : tab === "history" ? "会话" : "设置";
+  const pageKicker = tab === "session" ? "INTERVIEW DESK" : tab === "materials" ? "MATERIAL LIBRARY" : tab === "repo" ? "REPOSITORY WORKSPACE" : tab === "history" ? "SESSION ARCHIVE" : "WORKSPACE SETTINGS";
   const modeLabels: Record<TestMode, string> = { all: "语音 + 回答", asr: "仅语音转写", answer: "仅问题回答" };
   const activeMode = sessionMode === "idle" ? testMode : sessionMode;
   const activeModeLabel = modeLabels[activeMode === "answer" || activeMode === "asr" || activeMode === "all" ? activeMode : testMode];
@@ -1910,14 +1940,14 @@ function App() {
   return <main className="app-shell ui-redesign">
     <aside className="sidebar redesign-sidebar"><div className="brand redesign-brand"><span>IL</span><div><strong>Interview Lab</strong><small>实时面试工作台</small></div></div>
       <div className="sidebar-caption"><span>WORKSPACE</span><strong>准备 · 记录 · 复盘</strong></div>
-      <nav className="sidebar-nav redesign-nav" aria-label="主导航">{navItems.map((item) => <button key={item.id} className={tab === item.id ? "nav active" : "nav"} aria-current={tab === item.id ? "page" : undefined} onClick={() => setTab(item.id)}><span className="nav-index">{item.index}</span><span className="nav-copy"><strong>{item.label}</strong><small>{item.detail}</small></span><span className="nav-arrow" aria-hidden="true">›</span></button>)}</nav>
+      <nav className="sidebar-nav redesign-nav" aria-label="主导航">{navItems.map((item) => <button key={item.id} className={tab === item.id ? "nav active" : "nav"} aria-current={tab === item.id ? "page" : undefined} onClick={() => goToTab(item.id)}><span className="nav-index">{item.index}</span><span className="nav-copy"><strong>{item.label}</strong><small>{item.detail}</small></span><span className="nav-arrow" aria-hidden="true">›</span></button>)}</nav>
       <div className="sidebar-runtime"><span className="runtime-dot" /><div><strong>{desktopRuntime ? "桌面运行环境" : "浏览器预览"}</strong><small>{desktopRuntime ? "系统音频可用" : "ASR 需桌面端"}</small></div></div>
       <p className="sidebar-footer">受控测试模式 · 不保存原始音频<br /><span className="build-stamp">v{BUILD_INFO.version} · {BUILD_INFO.commit}</span></p></aside>
     <section className={tab === "session" ? "content session-content redesign-content" : "content redesign-content"}><header className="topbar redesign-topbar"><div className="topbar-copy"><p className="eyebrow">{pageKicker}</p><h1>{pageTitle}</h1><p className="topbar-subtitle">把注意力留给面试本身，配置和记录都在同一处。</p></div><div className="topbar-side"><span className={`status ${statusClass}`} role="status" aria-live="polite" aria-atomic="true"><i />{statusLabel}</span>{tab === "session" && <span className="mode-chip">{sessionActive ? activeModeLabel : `模式 · ${modeLabels[testMode]}`}</span>}</div></header>
       <p className="notice" role="status" aria-live="polite" aria-atomic="true" title={notice}>{notice}</p>
       <div className="quick-status redesign-status-row" role="region" aria-label="当前配置状态"><span className={llmReady ? "ready" : "pending"}><i aria-hidden="true" />模型：{llmReady ? "已就绪" : "待配置"}</span><span className={asrReady ? "ready" : "muted"}><i aria-hidden="true" />ASR：{asrReady ? "已配置" : "未配置"}</span><span className={materialClass}><i aria-hidden="true" />资料：{materialLabel}</span>{storageError && <span className="pending"><i aria-hidden="true" />本机存储：异常</span>}<span className="autosave-state"><i aria-hidden="true" />设置自动保存在本机</span></div>
       {tab === "session" && <section className={`interview-workspace ${sessionActive ? "is-running" : "is-preparing"}`}>
-        {!sessionActive && <section className="interview-prepare panel"><div className="prepare-hero"><div><span className="hero-kicker">READY WHEN YOU ARE</span><h2>{settings.sessionTitleDraft.trim() || "开始一场新的面试"}</h2><p>先确认主题、岗位方向和资料，再选择测试模式。启动后，问题与回答会成为唯一主线。</p></div><div className="prepare-hero-meta"><span><i />准备态</span><strong>{INTERVIEW_FOCUS_LABELS[settings.interviewFocus]}</strong><small>{materialCount ? `${materialCount} 项资料可用` : "尚未添加资料"}</small></div></div><div className="prepare-layout"><div className="prepare-main"><div className="panel-head session-head"><div><div className="panel-kicker">SESSION SETUP</div><h3>准备这场面试</h3><p>每次启动都会创建一条新的文本会话记录。</p></div><span className="section-counter">{history.length ? `已完成 ${history.length} 场` : "首次使用"}</span></div><label className="session-title-draft"><span>面试主题</span><input value={settings.sessionTitleDraft} onChange={(event) => setSettings((state) => ({ ...state, sessionTitleDraft: event.target.value }))} placeholder="例如：售前解决方案岗位一面" /></label><div className="prepare-fields"><label><span>岗位方向</span><select value={settings.interviewFocus} onChange={(event) => setSettings((state) => ({ ...state, interviewFocus: event.target.value as InterviewFocus }))}>{Object.entries(INTERVIEW_FOCUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label><span>测试模式</span><select value={testMode} onChange={(event) => setTestMode(event.target.value as TestMode)}><option value="all">语音识别 + 回答</option><option value="asr">仅语音转写</option><option value="answer">仅问题回答</option></select></label></div><div className="prepare-materials"><div><span className="field-label">资料来源</span><strong>{materials.confirmed ? "资料已确认，可直接用于回答" : hasMaterials ? "有资料，建议先检查摘要" : "可选，不添加资料也能开始"}</strong><small>{materials.repository?.name ? `含仓库：${materials.repository.name}` : "简历、JD、个人补充和项目仓库"}</small></div><button className="secondary-button" onClick={() => setTab("materials")}>打开资料库 <span aria-hidden="true">→</span></button></div><div className="start-check"><div className="start-check-head"><div><span className="panel-kicker">START CHECK</span><h3>启动检查</h3></div><span>{readinessItems.filter((item) => item.ready).length} / {readinessItems.length} 项满足</span></div><div className="readiness-list">{readinessItems.map((item) => <div className={`readiness-item ${item.ready ? "ready" : "pending"}`} key={item.label}><span className="readiness-icon" aria-hidden="true">{item.ready ? "✓" : "!"}</span><div><strong>{item.label}</strong><span>{item.value}</span></div><small>{item.detail}</small></div>)}</div></div><div className="prepare-start-row"><button className="primary start-button" onClick={() => startTest()}>开始面试 <span aria-hidden="true">→</span></button><span>启动后可随时暂停；系统只保留文本记录，不保存原始音频。</span></div></div><aside className="prepare-rail"><section className="prepare-side-block"><div className="panel-kicker">CURRENT CONFIG</div><h3>当前回答配置</h3><dl><div><dt>模型</dt><dd>{activeProfile?.name || "未选择"}</dd></div><div><dt>回答框架</dt><dd>{ANSWER_FRAMEWORK_LABELS[settings.answerFramework]}</dd></div><div><dt>自动模式</dt><dd>{settings.autoInterview.mode === "off" ? "手动提交" : settings.autoInterview.mode === "auto" ? "全自动" : "辅助自动"}</dd></div></dl><button className="text-button" onClick={() => setTab("settings")}>调整服务与行为 →</button></section><section className="prepare-side-block"><div className="panel-kicker">CONTINUE CONTEXT</div><h3>承接上一场</h3>{pendingContextTurns.length ? <><strong className="side-highlight">{pendingContextTurns.filter((turn) => turn.included).length} / {pendingContextTurns.length} 轮已选</strong><p>载入上下文后，新问题会延续已选问答。</p><button className="text-button" onClick={() => { setSelectedHistorySessionId(loadedSourceSessionIdRef.current); setTab("history"); }}>查看承接内容 →</button></> : history.length ? <><strong className="side-highlight">{history.length} 场历史会话</strong><p>从会话页选择一场，编辑后带入下一轮。</p><button className="text-button" onClick={() => setTab("history")}>浏览会话记录 →</button></> : <p>完成第一场面试后，这里会显示可承接的上下文。</p>}</section><SessionProgress stage={sessionStage} mode={testMode} /></aside></div></section>}
+        {!sessionActive && <section className="interview-prepare panel"><div className="prepare-hero"><div><span className="hero-kicker">READY WHEN YOU ARE</span><h2>{settings.sessionTitleDraft.trim() || "开始一场新的面试"}</h2><p>先确认主题、岗位方向和资料，再选择测试模式。启动后，问题与回答会成为唯一主线。</p></div><div className="prepare-hero-meta"><span><i />准备态</span><strong>{INTERVIEW_FOCUS_LABELS[settings.interviewFocus]}</strong><small>{materialCount ? `${materialCount} 项资料可用` : "尚未添加资料"}</small></div></div><div className="prepare-layout"><div className="prepare-main"><div className="panel-head session-head"><div><div className="panel-kicker">SESSION SETUP</div><h3>准备这场面试</h3><p>每次启动都会创建一条新的文本会话记录。</p></div><span className="section-counter">{history.length ? `已完成 ${history.length} 场` : "首次使用"}</span></div><label className="session-title-draft"><span>面试主题</span><input value={settings.sessionTitleDraft} onChange={(event) => setSettings((state) => ({ ...state, sessionTitleDraft: event.target.value }))} placeholder="例如：售前解决方案岗位一面" /></label><div className="prepare-fields"><label><span>岗位方向</span><select value={settings.interviewFocus} onChange={(event) => setSettings((state) => ({ ...state, interviewFocus: event.target.value as InterviewFocus }))}>{Object.entries(INTERVIEW_FOCUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label><span>测试模式</span><select value={testMode} onChange={(event) => setTestMode(event.target.value as TestMode)}><option value="all">语音识别 + 回答</option><option value="asr">仅语音转写</option><option value="answer">仅问题回答</option></select></label></div><div className="prepare-materials"><div><span className="field-label">资料来源</span><strong>{materials.confirmed ? "资料已确认，可直接用于回答" : hasMaterials ? "有资料，建议先检查摘要" : "可选，不添加资料也能开始"}</strong><small>{materials.repository?.name ? `含仓库：${materials.repository.name}` : "简历、JD、个人补充和项目仓库"}</small></div><button className="secondary-button" onClick={() => goToTab("materials")}>打开资料库 <span aria-hidden="true">→</span></button></div><div className="start-check"><div className="start-check-head"><div><span className="panel-kicker">START CHECK</span><h3>启动检查</h3></div><span>{readinessItems.filter((item) => item.ready).length} / {readinessItems.length} 项满足</span></div><div className="readiness-list">{readinessItems.map((item) => <div className={`readiness-item ${item.ready ? "ready" : "pending"}`} key={item.label}><span className="readiness-icon" aria-hidden="true">{item.ready ? "✓" : "!"}</span><div><strong>{item.label}</strong><span>{item.value}</span></div><small>{item.detail}</small></div>)}</div></div><div className="prepare-start-row"><button className="primary start-button" onClick={() => startTest()}>开始面试 <span aria-hidden="true">→</span></button><span>启动后可随时暂停；系统只保留文本记录，不保存原始音频。</span></div></div><aside className="prepare-rail"><section className="prepare-side-block"><div className="panel-kicker">CURRENT CONFIG</div><h3>当前回答配置</h3><dl><div><dt>模型</dt><dd>{activeProfile?.name || "未选择"}</dd></div><div><dt>回答框架</dt><dd>{ANSWER_FRAMEWORK_LABELS[settings.answerFramework]}</dd></div><div><dt>自动模式</dt><dd>{settings.autoInterview.mode === "off" ? "手动提交" : settings.autoInterview.mode === "auto" ? "全自动" : "辅助自动"}</dd></div></dl><button className="text-button" onClick={() => goToTab("settings")}>调整服务与行为 →</button></section><section className="prepare-side-block"><div className="panel-kicker">CONTINUE CONTEXT</div><h3>承接上一场</h3>{pendingContextTurns.length ? <><strong className="side-highlight">{pendingContextTurns.filter((turn) => turn.included).length} / {pendingContextTurns.length} 轮已选</strong><p>载入上下文后，新问题会延续已选问答。</p><button className="text-button" onClick={() => { setSelectedHistorySessionId(loadedSourceSessionIdRef.current); goToTab("history"); }}>查看承接内容 →</button></> : history.length ? <><strong className="side-highlight">{history.length} 场历史会话</strong><p>从会话页选择一场，编辑后带入下一轮。</p><button className="text-button" onClick={() => goToTab("history")}>浏览会话记录 →</button></> : <p>完成第一场面试后，这里会显示可承接的上下文。</p>}</section><SessionProgress stage={sessionStage} mode={testMode} /></aside></div></section>}
         <section className={`session-grid interview-session-grid ${sessionActive ? "running-session-grid" : "preparing-session-grid"}`}>
         <div className="panel session-panel interview-question-panel">
           <div className="panel-head session-head"><div><div className="panel-kicker">LIVE SESSION</div><h2>当前面试问题</h2><p>{activeModeLabel} · 默认输出设备 · PCM16 / Mono / 16kHz</p></div><span className={`session-badge ${sessionStage}`}><i />{statusLabel}</span></div>
@@ -1928,7 +1958,7 @@ function App() {
            <textarea className="question-input" aria-labelledby="question-heading" aria-describedby="question-help" rows={6} value={question} onChange={(event) => updateCurrentQuestion(event.target.value)} placeholder="ASR 最终文本会显示在这里，也可以直接输入问题测试模型。" />
           <div className="session-secondary-controls">
             <div className="interview-context">本次面试上下文：完整 {contextStats.total} 轮 · 本次发送 {contextStats.sent} 轮{contextStats.omitted ? ` · 超出窗口省略 ${contextStats.omitted} 轮` : ""}{sessionActive && activeSessionTitle ? ` · ${activeSessionTitle}` : ""}</div>
-            {pendingContextTurns.length > 0 && !sessionActive && <div className="pending-context-strip"><span>下一轮将承接 {pendingContextTurns.filter((turn) => turn.included).length} / {pendingContextTurns.length} 轮</span><button className="text-button" onClick={() => { setSelectedHistorySessionId(loadedSourceSessionIdRef.current); setTab("history"); }}>查看并修改上下文</button></div>}
+            {pendingContextTurns.length > 0 && !sessionActive && <div className="pending-context-strip"><span>下一轮将承接 {pendingContextTurns.filter((turn) => turn.included).length} / {pendingContextTurns.length} 轮</span><button className="text-button" onClick={() => { setSelectedHistorySessionId(loadedSourceSessionIdRef.current); goToTab("history"); }}>查看并修改上下文</button></div>}
             <SessionProgress stage={sessionStage} mode={sessionMode === "idle" ? testMode : sessionMode} />
             {!sessionActive && <label className="session-title-draft"><span>本次会话主题</span><input value={settings.sessionTitleDraft} onChange={(event) => setSettings((state) => ({ ...state, sessionTitleDraft: event.target.value }))} placeholder="例如：售前解决方案岗位一面" /></label>}
             <label className="session-framework"><span>本场回答框架</span><select value={sessionFrameworkOverride} onChange={(event) => setSessionFrameworkOverride(event.target.value as AnswerFramework | "")}><option value="">跟随默认：{ANSWER_FRAMEWORK_LABELS[settings.answerFramework]}</option>{Object.entries(ANSWER_FRAMEWORK_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
@@ -1942,8 +1972,8 @@ function App() {
         </div>
         {settings.asr.debug && <div className="panel debug-panel"><h2>ASR 调试消息</h2><pre>{debug.join("\n\n") || "等待 WebSocket 消息…"}</pre></div>}
        </section></section>}
-       {tab === "materials" && <section className="materials-grid library-layout"><aside className="panel materials-index"><div className="panel-kicker">LIBRARY</div><h2>资料目录</h2><p>{materialCount ? `${materialCount} 项内容已添加` : "还没有添加内容"}</p><div className="materials-index-list"><div className="materials-index-item active"><span>CV</span><div><strong>候选人资料</strong><small>{materials.resume.trim() ? "简历已添加" : "等待简历"}</small></div></div><div className="materials-index-item"><span>JD</span><div><strong>目标岗位</strong><small>{materials.jobDescription.trim() ? "岗位描述已添加" : "等待岗位描述"}</small></div></div><div className="materials-index-item"><span>REPO</span><div><strong>项目仓库</strong><small>{materials.repository?.name || "可选项目资料"}</small></div></div></div><div className="materials-index-note"><strong>{materials.confirmed ? "已确认" : hasMaterials ? "等待确认" : "可选"}</strong><span>只有确认后的摘要会参与回答。</span></div></aside><div className="panel"><div className="panel-head"><div><div className="panel-kicker">CANDIDATE CONTEXT</div><h2>候选人材料</h2><p>可选：PDF、DOCX、TXT 或直接粘贴。</p></div><button onClick={() => importMaterial("resume")}>导入简历</button></div><label>简历原文</label><textarea rows={10} value={materials.resume} onChange={(event) => setMaterials((state) => ({ ...state, resume: event.target.value, confirmed: false }))} /><label>个人补充资料</label><textarea rows={5} value={materials.personalNotes} onChange={(event) => setMaterials((state) => ({ ...state, personalNotes: event.target.value, confirmed: false }))} /></div><div className="panel"><div className="panel-head"><div><div className="panel-kicker">TARGET ROLE</div><h2>目标岗位</h2><p>可选：一次会话仅使用一份 JD。</p></div><button onClick={() => importMaterial("jobDescription")}>导入 JD</button></div><label>岗位描述</label><textarea rows={10} value={materials.jobDescription} onChange={(event) => setMaterials((state) => ({ ...state, jobDescription: event.target.value, confirmed: false }))} /><button className="primary full" onClick={draftSummaries}>生成可编辑摘要草稿</button></div><div className="panel full-width context-panel"><div className="panel-head"><div><div className="panel-kicker">READY FOR LLM</div><h2>确认后的 LLM 上下文</h2><p>只有确认后的摘要才会参与回答，避免模型误用未检查的信息。</p></div><div className="context-actions"><span className={`context-state ${materialClass}`}><i />{materialLabel}</span><button className={materials.confirmed ? "success" : "primary"} onClick={() => setMaterials((state) => ({ ...state, confirmed: !state.confirmed }))}>{materials.confirmed ? "取消确认" : "确认并用于回答"}</button></div></div><div className="summary-grid"><div><label>候选人事实摘要</label><textarea rows={12} value={materials.candidateSummary} onChange={(event) => setMaterials((state) => ({ ...state, candidateSummary: event.target.value, confirmed: false }))} /></div><div><label>岗位要求摘要</label><textarea rows={12} value={materials.jobSummary} onChange={(event) => setMaterials((state) => ({ ...state, jobSummary: event.target.value, confirmed: false }))} /></div></div></div></section>}
-      {tab === "materials" && <section className="panel repository-panel"><div className="panel-head"><div><div className="panel-kicker">OPEN SOURCE PROJECT</div><h2>GitHub / Gitee 仓库</h2><p>导入公开仓库的 README、目录和关键配置，用于回答项目与 Vibe Coding 经历问题。</p></div><span className={`context-state ${materials.repository?.confirmed ? "ready" : materials.repository ? "pending" : "muted"}`}><i />{materials.repository?.confirmed ? "已确认" : materials.repository ? "待确认" : "未导入"}</span></div><div className="repository-import-row"><input value={repositoryUrl} onChange={(event) => setRepositoryUrl(event.target.value)} placeholder="https://github.com/owner/repo 或 https://gitee.com/owner/repo" /><button className="primary" disabled={repositoryImporting} onClick={() => void importRepositoryContext()}>{repositoryImporting ? "导入中…" : "导入仓库"}</button></div>{materials.repository && <><div className="repository-meta"><strong>{materials.repository.name}</strong><span>{materials.repository.provider === "github" ? "GitHub" : "Gitee"} · {materials.repository.branch} · {materials.repository.fileTree.split("\n").filter(Boolean).length} 个文件</span></div><label>项目摘要（可编辑）</label><textarea rows={5} value={materials.repository.summary} onChange={(event) => setMaterials((state) => ({ ...state, repository: state.repository ? { ...state.repository, summary: event.target.value, confirmed: false } : state.repository }))} /><label>关键文件与目录（只读预览）</label><textarea className="repository-preview" readOnly rows={8} value={`${materials.repository.fileTree}\n\n${materials.repository.keyFiles}`} /><div className="context-actions repository-actions"><button className={materials.repository.confirmed ? "success" : "primary"} onClick={() => setMaterials((state) => ({ ...state, repository: state.repository ? { ...state.repository, confirmed: !state.repository.confirmed } : state.repository }))}>{materials.repository.confirmed ? "取消用于回答" : "确认并用于回答"}</button><button onClick={() => setMaterials((state) => ({ ...state, repository: undefined }))}>移除仓库</button></div></>}</section>}
+       {tab === "materials" && <section className="materials-grid library-layout"><aside className="panel materials-index"><div className="panel-kicker">LIBRARY</div><h2>资料目录</h2><p>{materialCount ? `${materialCount} 项内容已添加` : "还没有添加内容"}</p><div className="materials-index-list"><div className="materials-index-item active"><span>CV</span><div><strong>候选人资料</strong><small>{materials.resume.trim() ? "简历已添加" : "等待简历"}</small></div></div><div className="materials-index-item"><span>JD</span><div><strong>目标岗位</strong><small>{materials.jobDescription.trim() ? "岗位描述已添加" : "等待岗位描述"}</small></div></div><button type="button" className="materials-index-item" onClick={() => goToTab("repo")}><span>REPO</span><div><strong>项目仓库</strong><small>{materials.repository?.name || "可选项目资料"}</small></div><em aria-hidden="true">›</em></button></div><div className="materials-index-note"><strong>{materials.confirmed ? "已确认" : hasMaterials ? "等待确认" : "可选"}</strong><span>只有确认后的摘要会参与回答。</span></div></aside><div className="panel"><div className="panel-head"><div><div className="panel-kicker">CANDIDATE CONTEXT</div><h2>候选人材料</h2><p>可选：PDF、DOCX、TXT 或直接粘贴。</p></div><button onClick={() => importMaterial("resume")}>导入简历</button></div><label>简历原文</label><textarea rows={10} value={materials.resume} onChange={(event) => setMaterials((state) => ({ ...state, resume: event.target.value, confirmed: false }))} /><label>个人补充资料</label><textarea rows={5} value={materials.personalNotes} onChange={(event) => setMaterials((state) => ({ ...state, personalNotes: event.target.value, confirmed: false }))} /></div><div className="panel"><div className="panel-head"><div><div className="panel-kicker">TARGET ROLE</div><h2>目标岗位</h2><p>可选：一次会话仅使用一份 JD。</p></div><button onClick={() => importMaterial("jobDescription")}>导入 JD</button></div><label>岗位描述</label><textarea rows={10} value={materials.jobDescription} onChange={(event) => setMaterials((state) => ({ ...state, jobDescription: event.target.value, confirmed: false }))} /><button className="primary full" onClick={draftSummaries}>生成可编辑摘要草稿</button></div><div className="panel full-width context-panel"><div className="panel-head"><div><div className="panel-kicker">READY FOR LLM</div><h2>确认后的 LLM 上下文</h2><p>只有确认后的摘要才会参与回答，避免模型误用未检查的信息。</p></div><div className="context-actions"><span className={`context-state ${materialClass}`}><i />{materialLabel}</span><button className={materials.confirmed ? "success" : "primary"} onClick={() => setMaterials((state) => ({ ...state, confirmed: !state.confirmed }))}>{materials.confirmed ? "取消确认" : "确认并用于回答"}</button></div></div><div className="summary-grid"><div><label>候选人事实摘要</label><textarea rows={12} value={materials.candidateSummary} onChange={(event) => setMaterials((state) => ({ ...state, candidateSummary: event.target.value, confirmed: false }))} /></div><div><label>岗位要求摘要</label><textarea rows={12} value={materials.jobSummary} onChange={(event) => setMaterials((state) => ({ ...state, jobSummary: event.target.value, confirmed: false }))} /></div></div></div></section>}
+       {tab === "repo" && <RepositoryWorkspace repository={materials.repository} repositoryUrl={repositoryUrl} importing={repositoryImporting} onUrlChange={setRepositoryUrl} onImport={() => void importRepositoryContext()} onSummaryChange={(summary) => setMaterials((state) => ({ ...state, repository: state.repository ? { ...state.repository, summary, confirmed: false } : undefined }))} onToggleConfirmed={() => setMaterials((state) => ({ ...state, repository: state.repository ? { ...state.repository, confirmed: !state.repository.confirmed } : undefined }))} onRemove={() => setMaterials((state) => ({ ...state, repository: undefined }))} />}
        {tab === "settings" && <section className="settings-stack settings-workspace"><div className="settings-overview"><div><div className="panel-kicker">WORKSPACE CONFIGURATION</div><h2>服务与行为</h2><p>常用配置保持在前，高级协议和数据恢复按需展开。</p></div><div className="settings-overview-actions"><span className={`context-state ${llmReady ? "ready" : "pending"}`}><i />{llmReady ? "回答模型已就绪" : "模型待配置"}</span><button className="primary" onClick={saveConfiguration}>保存配置</button></div></div><AsrProviderPanel settings={settings} asrProfileTests={asrProfileTests} expandedPresetIds={expandedAsrPresetIds} onToggleExpanded={toggleAsrPresetExpanded} onSelect={selectAsrPreset} onUpdate={updateAsrProfile} onTest={testAsrProfile} onSave={saveConfiguration} />
         <LlmProviderPanel settings={settings} setSettings={setSettings} profileTests={profileTests} profileUsages={profileUsages} profileModelStates={profileModelStates} profileQuery={profileQuery} profileSort={profileSort} expandedProfileIds={expandedProfileIds} setProfileQuery={setProfileQuery} setProfileSort={setProfileSort} onToggleExpanded={toggleProfileExpanded} onAddPreset={addProfileFromPreset} onApplyPreset={applyProfilePreset} onDuplicate={duplicateProfile} onRemove={removeProfile} onMove={moveProfile} onTest={testProfile} onUsage={queryProfileUsage} onLoadModels={loadProfileModels} onInvalidateTest={(id) => setProfileTests((state) => { const next = { ...state }; delete next[id]; return next; })} onInvalidateUsage={(id) => setProfileUsages((state) => { const next = { ...state }; delete next[id]; return next; })} onSave={saveConfiguration} />
         <div className="panel"><div className="panel-head"><div><h2>回答策略</h2><p>默认策略会用于新会话；会话页可以临时覆盖，不会改动这里的配置。</p></div></div><div className="form-grid"><Field label="面试方向" value={settings.interviewFocus} onChange={(value) => setSettings((state) => ({ ...state, interviewFocus: value as InterviewFocus }))} select={Object.entries(INTERVIEW_FOCUS_LABELS)} /><Field label="默认回答框架" value={settings.answerFramework} onChange={(value) => setSettings((state) => ({ ...state, answerFramework: value as AnswerFramework }))} select={Object.entries(ANSWER_FRAMEWORK_LABELS)} /></div></div>
@@ -1970,6 +2000,120 @@ function App() {
       })() : <><div className="panel-head"><div><h2>面试会话记录</h2><p>每次启动测试都会创建一场面试；不保存音频。</p></div><button className="danger" onClick={() => { clearHistory(); setHistory([]); setSelectedHistorySessionId(undefined); setHistoryQuery(""); }}>清空记录</button></div><div className="history-toolbar"><label className="history-search"><span>搜索会话</span><input value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} placeholder="主题、问题、回答、模型或时间" /></label><span>{visibleHistory.length} / {history.length} 场</span>{historyQuery && <button className="text-button" onClick={() => setHistoryQuery("")}>清除搜索</button>}</div>{history.length ? visibleHistory.length ? <div className="history-list">{visibleHistory.map((session) => <button className="history-summary" key={session.id} onClick={() => setSelectedHistorySessionId(session.id)}><strong>{session.title}</strong><span>{new Date(session.updatedAt).toLocaleString()} · 完整 {session.turns.length} 轮{session.carriedTurnCount ? ` · 承接 ${session.carriedTurnCount} 轮` : ""}{session.lastContextTurnCount ? ` · 上次发送 ${session.lastContextTurnCount} 轮` : ""}</span><small>{session.asrName} → {session.llmName}{session.draft?.active ? " · 未完成草稿" : ""}</small></button>)}</div> : <p className="empty">没有匹配的会话记录。</p> : <p className="empty">还没有面试会话记录。</p>}</>}</section>}
     </section>
   </main>;
+}
+
+type RepositoryWorkspaceProps = {
+  repository?: RepositoryContext;
+  repositoryUrl: string;
+  importing: boolean;
+  onUrlChange: (value: string) => void;
+  onImport: () => void;
+  onSummaryChange: (value: string) => void;
+  onToggleConfirmed: () => void;
+  onRemove: () => void;
+};
+
+function parseRepositoryKeyFiles(raw: string) {
+  const sections: Array<{ path: string; content: string }> = [];
+  let current: { path: string; content: string[] } | undefined;
+  const hasExplicitMarkers = raw.split(/\r?\n/).some((line) => /^###\s+__INTERVIEW_LAB_FILE__\s+/.test(line));
+  for (const line of raw.split(/\r?\n/)) {
+    const heading = line.match(/^###\s+__INTERVIEW_LAB_FILE__\s+(.+?)\s*$/)
+      || (!hasExplicitMarkers ? line.match(/^###\s+((?:[^/\r\n]+\/)*[^/\r\n]+\.[A-Za-z0-9_-]+|(?:Dockerfile|Makefile|LICENSE))\s*$/i) : null);
+    if (heading) {
+      if (current) sections.push({ path: current.path, content: current.content.join("\n").trim() });
+      current = { path: heading[1].trim(), content: [] };
+    } else if (current) {
+      current.content.push(line);
+    }
+  }
+  if (current) sections.push({ path: current.path, content: current.content.join("\n").trim() });
+  if (!sections.length && raw.trim()) return [{ path: "关键文件", content: raw.trim() }];
+  return sections.filter((section) => section.content || section.path);
+}
+
+function formatRepositoryDate(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "未知时间" : date.toLocaleString();
+}
+
+function RepositoryWorkspace({ repository, repositoryUrl, importing, onUrlChange, onImport, onSummaryChange, onToggleConfirmed, onRemove }: RepositoryWorkspaceProps) {
+  const [view, setView] = useState<RepositoryView>("overview");
+  const files = useMemo(() => (repository?.fileTree || "").split(/\r?\n/).map((path) => path.trim()).filter(Boolean), [repository?.fileTree]);
+  const keyFiles = useMemo(() => parseRepositoryKeyFiles(repository?.keyFiles || ""), [repository?.keyFiles]);
+
+  useEffect(() => {
+    setView("overview");
+  }, [repository?.url]);
+
+  async function openRepository() {
+    if (!repository?.url) return;
+    if (isTauri()) {
+      await openUrl(repository.url);
+      return;
+    }
+    window.open(repository.url, "_blank", "noopener,noreferrer");
+  }
+
+  function submitImport(event: ChangeEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!importing) onImport();
+  }
+
+  const importForm = (className = "repository-url-bar") => <form className={className} onSubmit={submitImport}>
+    <label htmlFor="repository-url"><span>仓库地址</span><input id="repository-url" value={repositoryUrl} onChange={(event) => onUrlChange(event.target.value)} placeholder="https://github.com/owner/repo 或 https://gitee.com/owner/repo" /></label>
+    <button type="submit" className="primary" disabled={importing || !repositoryUrl.trim()}>{importing ? "导入中…" : repository ? "重新导入" : "导入仓库"}</button>
+  </form>;
+
+  if (!repository) {
+    return <section className="repository-workspace">
+      <div className="repository-empty panel">
+        <div className="repository-empty-copy"><span className="repository-provider-mark">REPO</span><div><div className="panel-kicker">REPOSITORY WORKSPACE</div><h2>导入一个项目仓库</h2><p>把公开的 GitHub 或 Gitee 项目带进面试上下文，先查看摘要、目录和关键配置，再决定是否用于回答。</p></div></div>
+        {importForm("repository-url-bar repository-empty-form")}
+        <div className="repository-empty-note"><span>支持公开仓库</span><span>最多读取有限目录和常见关键文件</span><span>导入后仍可手动编辑摘要</span></div>
+      </div>
+    </section>;
+  }
+
+  const providerLabel = repository.provider === "github" ? "GitHub" : "Gitee";
+  const statusLabel = repository.confirmed ? "已确认并用于回答" : "待检查";
+  const viewItems: Array<{ id: RepositoryView; label: string; detail: string }> = [
+    { id: "overview", label: "概览", detail: "摘要与使用状态" },
+    { id: "files", label: "文件树", detail: `${files.length} 个文件` },
+    { id: "key-files", label: "关键文件", detail: `${keyFiles.length} 个文件` },
+  ];
+
+  return <section className="repository-workspace">
+    <header className="repository-hero panel">
+      <div className="repository-hero-copy"><div className="panel-kicker">REPOSITORY WORKSPACE</div><div className="repository-identity"><span className="repository-provider-mark">{providerLabel}</span><div><h2>{repository.name}</h2><p>{repository.description || "暂无仓库描述，可在摘要中补充本人负责的内容。"}</p><small title={repository.url}>{repository.url}</small></div></div></div>
+      <div className="repository-hero-actions"><span className={`context-state ${repository.confirmed ? "ready" : "pending"}`}><i />{statusLabel}</span><button type="button" className="secondary-button" onClick={() => void openRepository()}>打开原仓库 <span aria-hidden="true">↗</span></button></div>
+    </header>
+    <div className="repository-stat-grid" aria-label="仓库信息">
+      <div><span>来源</span><strong>{providerLabel}</strong></div>
+      <div><span>默认分支</span><strong>{repository.branch}</strong></div>
+      <div><span>已导入文件</span><strong>{files.length}</strong></div>
+      <div><span>导入时间</span><strong>{formatRepositoryDate(repository.importedAt)}</strong></div>
+    </div>
+    <div className="repository-layout">
+      <aside className="repository-sidebar panel">
+        <div className="panel-kicker">WORKSPACE</div>
+        <nav className="repository-subnav" aria-label="仓库工作区视图" role="tablist">
+          {viewItems.map((item) => <button type="button" role="tab" aria-selected={view === item.id} className={view === item.id ? "active" : ""} key={item.id} onClick={() => setView(item.id)}><span><strong>{item.label}</strong><small>{item.detail}</small></span><b aria-hidden="true">›</b></button>)}
+        </nav>
+        <div className="repository-sidebar-note"><span className={`context-state ${repository.confirmed ? "ready" : "pending"}`}><i />{statusLabel}</span><p>{repository.confirmed ? "仓库摘要会随候选人资料一起参与新回答。" : "检查摘要与关键文件后，再确认是否用于回答。"}</p></div>
+        <button type="button" className="danger repository-remove-button" onClick={onRemove}>移除当前仓库</button>
+      </aside>
+      <section className="repository-main panel" role="tabpanel">
+        {view === "overview" && <div className="repository-overview">
+          <div className="repository-main-head"><div><div className="panel-kicker">PROJECT BRIEF</div><h3>项目概览</h3><p>摘要可以加入你本人负责的模块、技术决策和业务结果。</p></div><span className={`context-state ${repository.confirmed ? "ready" : "pending"}`}><i />{repository.confirmed ? "回答已启用" : "尚未用于回答"}</span></div>
+          <div className="repository-overview-grid"><div className="repository-summary-block"><label htmlFor="repository-summary">项目摘要（可编辑）</label><textarea id="repository-summary" rows={12} value={repository.summary} onChange={(event) => onSummaryChange(event.target.value)} placeholder="补充你在这个项目中的职责、关键决策、协作方式和最终结果。" /><div className="repository-summary-footer"><span>修改摘要后需要重新确认</span><button type="button" className={repository.confirmed ? "success" : "primary"} onClick={onToggleConfirmed}>{repository.confirmed ? "取消用于回答" : "确认并用于回答"}</button></div></div><dl className="repository-detail-list"><div><dt>项目描述</dt><dd>{repository.description || "暂无描述"}</dd></div><div><dt>默认分支</dt><dd>{repository.branch}</dd></div><div><dt>目录范围</dt><dd>公开仓库有限目录 · 深度 2</dd></div><div><dt>原始地址</dt><dd title={repository.url}>{repository.url}</dd></div></dl></div>
+        </div>}
+        {view === "files" && <div className="repository-files-view"><div className="repository-main-head"><div><div className="panel-kicker">PROJECT STRUCTURE</div><h3>文件树</h3><p>展示本次导入到回答上下文的文件路径。</p></div><strong className="repository-view-count">{files.length} 个文件</strong></div>{files.length ? <div className="repository-file-list" role="list">{files.map((path, index) => <div className="repository-file-row" role="listitem" key={`${path}-${index}`}><span className="repository-file-icon" aria-hidden="true">{path.includes("/") ? "↳" : "•"}</span><code title={path}>{path}</code><small>{path.split("/").pop()}</small></div>)}</div> : <p className="repository-view-empty">没有读取到目录内容。</p>}</div>}
+        {view === "key-files" && <div className="repository-key-files-view"><div className="repository-main-head"><div><div className="panel-kicker">READ-ONLY PREVIEW</div><h3>关键文件</h3><p>用于辅助理解项目的 README、依赖和常见配置文件。</p></div><strong className="repository-view-count">{keyFiles.length} 个文件</strong></div>{keyFiles.length ? <div className="repository-key-file-list">{keyFiles.map((file, index) => <article className="repository-key-file" key={`${file.path}-${index}`}><div className="repository-key-file-head"><strong>{file.path}</strong><span>只读</span></div><pre className="repository-code"><code>{file.content || "（文件为空或无法读取）"}</code></pre></article>)}</div> : <p className="repository-view-empty">没有读取到关键文件预览。</p>}</div>}
+        {importForm("repository-url-bar repository-reimport")}
+      </section>
+    </div>
+  </section>;
 }
 
 function OverlaySettingsPanel({ settings, onChange }: { settings: OverlaySettings; onChange: (patch: Partial<OverlaySettings>) => void }) {
